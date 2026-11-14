@@ -147,7 +147,8 @@ def cmd_setup(client, _args):
             print("registered App ID %s" % identifier)
         else:
             print("App ID %s exists" % identifier)
-        existing = client.request("GET", "/bundleIds/%s/bundleIdCapabilities?limit=200" % bundle["id"]).get("data", [])
+        # This relationship takes no `limit` (HTTP 400); an App ID has only a few capabilities.
+        existing = client.request("GET", "/bundleIds/%s/bundleIdCapabilities" % bundle["id"]).get("data", [])
         enabled = {c["attributes"]["capabilityType"] for c in existing}
         for capability in capabilities:
             if capability in enabled:
