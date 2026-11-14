@@ -14,6 +14,12 @@ out_path = sys.argv[1]
 with open("build-system/yougram-configuration.json") as f:
     config = json.load(f)
 
+# App Store signing (build-system/yougram-signing/asc.py) uses the real team's profiles.
+team_id = os.environ.get("TEAM_ID", "").strip()
+if team_id:
+    config["team_id"] = team_id
+    print("Team ID %s (App Store signing)." % team_id)
+
 api_id = os.environ.get("API_ID", "").strip()
 api_hash = os.environ.get("API_HASH", "").strip()
 if api_id and api_hash:

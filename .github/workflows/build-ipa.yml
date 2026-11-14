@@ -1,5 +1,5 @@
 name: Build IPA
-run-name: Build IPA (${{ inputs.configuration }}, ${{ inputs.runner }}${{ !inputs.use_cache && ', clean' || '' }})
+run-name: Build IPA (${{ inputs.configuration }}, ${{ inputs.signing }}, ${{ inputs.runner }}${{ !inputs.use_cache && ', clean' || '' }})
 
 # Manual only: pushes never start a build. Run it from Actions > Build IPA > Run workflow,
 # or `gh workflow run build-ipa.yml -R YougramTeam/Yougram-iOS`.
@@ -12,9 +12,15 @@ run-name: Build IPA (${{ inputs.configuration }}, ${{ inputs.runner }}${{ !input
 #   next run picks up from there instead of starting over.
 # - Cache size budget: repository variable BAZEL_CACHE_GB (default 9, inside the free
 #   10 GB). Raise the repo's Actions cache limit in Settings > Actions before raising it.
-# - Bundle id: build-system/yougram-configuration.json. The IPA is signed with placeholder
-#   profiles for it (build-system/yougram-codesigning, made by its generate_profiles.py from
-#   build-system/fake-codesigning); re-sign it to install.
+# - Bundle id: build-system/yougram-configuration.json.
+# - Signing:
+#   * testflight: build-system/yougram-signing/asc.py creates a fresh Apple Distribution
+#     certificate and App Store profiles with the App Store Connect API key (secrets
+#     ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY), the build is uploaded to TestFlight, and
+#     the certificate and profiles are revoked and deleted at the end of the same run, whatever
+#     happened. Needs the one-time "App Store setup" workflow plus the App Group steps it prints.
+#   * placeholder: signed with build-system/yougram-codesigning (no Apple account); re-sign the
+#     .ipa to install it.
 
 on:
   workflow_dispatch:
@@ -38,6 +44,13 @@ on:
         description: Stop compiling after this many minutes and save the cache (the next run resumes). 165 keeps a whole run inside the Free plan's $12 of macOS minutes; up to 300.
         type: number
         default: 300
+      signing:
+        description: testflight signs with your App Store Connect API key and uploads to TestFlight; placeholder needs no Apple account (re-sign the .ipa to install).
+        type: choice
+        options:
+          - testflight
+          - placeholder
+        default: testflight
 
 permissions:
   contents: read
@@ -54,6 +67,8 @@ env:
   CACHE_BUDGET_GB: ${{ vars.BAZEL_CACHE_GB || '9' }}
   CACHE_PREFIX: bazel-${{ inputs.configuration }}-
   CACHE_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+  SIGNING: ${{ inputs.signing }}
+  SIGNING_DIR: ${{ github.workspace }}/../yougram-signing
 
 jobs:
   build:
@@ -112,6 +127,27 @@ jobs:
             fi
           fi
           xcrun metal --version
+
+      # Before the long build, so a missing secret or App ID fails in seconds.
+      - name: Prepare App Store signing
+        id: signing
+        if: inputs.signing == 'testflight'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          python3 build-system/yougram-signing/asc.py prepare --out "$SIGNING_DIR" --label "run $GITHUB_RUN_ID"
+          echo "TEAM_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["team_id"])' "$SIGNING_DIR/state.json")" >> "$GITHUB_ENV"
+          echo "CODESIGNING_DIR=$SIGNING_DIR" >> "$GITHUB_ENV"
+
+      - name: Use placeholder signing
+        if: inputs.signing != 'testflight'
+        run: |
+          mkdir -p "$SIGNING_DIR"
+          cp -R build-system/yougram-codesigning/profiles "$SIGNING_DIR/profiles"
+          cp -R build-system/fake-codesigning/certs "$SIGNING_DIR/certs"
+          echo "CODESIGNING_DIR=$SIGNING_DIR" >> "$GITHUB_ENV"
 
       - name: Write build configuration
         env:
@@ -181,13 +217,13 @@ jobs:
         timeout-minutes: ${{ inputs.build_minutes }}
         run: |
           df -h /
-          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
+          python3 build-system/Make/ImportCertificates.py --path "$CODESIGNING_DIR/certs"
           python3 -u build-system/Make/Make.py \
             --overrideXcodeVersion \
             --cacheDir="$DISK_CACHE" \
             build \
             --configurationPath="$RUNNER_TEMP/yougram-configuration.json" \
-            --codesigningInformationPath=build-system/yougram-codesigning \
+            --codesigningInformationPath="$CODESIGNING_DIR" \
             --configuration="$CONFIGURATION" \
             --buildNumber="$BUILD_NUMBER" \
             --disableDsym
@@ -199,8 +235,25 @@ jobs:
           cp bazel-bin/Telegram/Telegram.ipa "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER.ipa"
           ls -lh "$RUNNER_TEMP/out"
 
+      - name: Upload to TestFlight
+        if: steps.build.outcome == 'success' && inputs.signing == 'testflight'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          # altool finds the key as ~/.appstoreconnect/private_keys/AuthKey_<id>.p8.
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+          xcrun altool --upload-app --type ios --file "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER.ipa" \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          rm -f ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+          echo "Uploaded build $BUILD_NUMBER. It appears in TestFlight once Apple has processed it (usually 5-30 minutes)." >> "$GITHUB_STEP_SUMMARY"
+
+      # TestFlight already has it, and the private repo's artifact storage is 500 MB: keep the
+      # .ipa as a download only for placeholder builds.
       - name: Upload the IPA
-        if: steps.build.outcome == 'success'
+        if: steps.build.outcome == 'success' && inputs.signing != 'testflight'
         uses: actions/upload-artifact@v7
         with:
           name: Yougram-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}-${{ inputs.configuration }}
@@ -208,6 +261,19 @@ jobs:
           retention-days: 14
           compression-level: 0 # an .ipa is already a zip
           if-no-files-found: error
+
+      # Whatever happened (failure, timeout, even a cancel): the signing certificate and
+      # profiles made for this run must not outlive it.
+      - name: Revoke this run's certificate and profiles
+        if: always() && inputs.signing == 'testflight'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          python3 build-system/yougram-signing/asc.py cleanup --out "$SIGNING_DIR"
+          rm -rf "$SIGNING_DIR"
+          security delete-keychain temp.keychain 2>/dev/null || true
 
       # Cache saving runs after a failed or timed-out build too (that is the resume), but
       # not after a manual cancel, which means "stop spending".

@@ -155,6 +155,15 @@ are `build-system/yougram-codesigning/profiles`, generated from `build-system/fa
 no profile for it. `Telegram/BUILD` already drops Telegram-only capabilities (Apple Pay merchants, notification
 filtering, background GPU) for any other bundle id.
 
+TestFlight builds (`signing: testflight`) sign for real: `build-system/yougram-signing/asc.py` uses the App Store
+Connect API key (secrets `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY`) to create a fresh Apple Distribution
+certificate and App Store profiles per run, and revokes and deletes them at the end of the same run, whatever
+happened (TestFlight builds are re-signed by Apple, so that is harmless). The API cannot create or assign App Groups,
+and **Yougram does not launch without its app group** (the database lives in `group.<bundle id>`; `AppDelegate`
+stops at "Error 2" before any UI, which looks like a black window): the "App Store setup" workflow registers the App
+IDs and prints the one-time portal steps. iCloud is off in `yougram-configuration.json` for the same reason
+(containers can't be created through the API).
+
 ### CI builds and external downloads
 
 GitLab CI (`.gitlab-ci.yml`) builds, uploads to TestFlight and verifies in tart VMs on the runner host; how they run,

@@ -1,0 +1,34 @@
+name: App Store setup
+
+# One-time (idempotent): registers Yougram's App IDs (the app and its 6 extensions) and enables
+# their capabilities with the App Store Connect API key, then prints the App Group steps the API
+# can't do. Runs on Linux: about a tenth of a macOS minute's price.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            build-system/yougram-signing
+            build-system/yougram-configuration.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Register App IDs and capabilities
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          python3 build-system/yougram-signing/asc.py setup | tee "$RUNNER_TEMP/setup.txt"
+          { echo '```'; cat "$RUNNER_TEMP/setup.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
