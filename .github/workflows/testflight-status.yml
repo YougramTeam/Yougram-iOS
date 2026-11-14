@@ -1,0 +1,39 @@
+name: TestFlight status
+run-name: TestFlight status (build ${{ inputs.build_number }})
+
+# Waits until Apple has processed an uploaded build and reports whether it is valid. "Build IPA"
+# runs the same check after every TestFlight upload; this one is for checking a build again later.
+# Linux only: about a tenth of a macOS minute's price.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: The build number (CFBundleVersion) of the upload, as "Build IPA" printed it
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            build-system/yougram-signing
+            build-system/yougram-configuration.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Wait for Apple to process build ${{ inputs.build_number }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: python3 build-system/yougram-signing/asc.py wait-build --build-number "$BUILD_NUMBER" --minutes 40

@@ -8,6 +8,8 @@
            <out>/profiles/*.mobileprovision, <out>/certs/Signing.p12 (password P12_PASSWORD), and
            <out>/state.json with the team id and what to delete afterwards.
   cleanup  Revoke that certificate and delete those profiles (always run after a build).
+  wait-build  Poll an uploaded build until Apple has processed it (VALID), and fail if Apple
+           rejects it (INVALID); Apple emails the reasons, the API doesn't give them.
 
 TestFlight builds are re-signed by Apple, so revoking the certificate once the upload is done
 does not affect them. Nothing here touches certificates or profiles it did not create.
@@ -277,6 +279,36 @@ def cmd_cleanup(client, args):
         print("revoked certificate %s" % state["certificate"])
 
 
+# ---- TestFlight ------------------------------------------------------------------
+
+def cmd_wait_build(client, args):
+    base = bundle_id_base()
+    apps = client.request("GET", "/apps?" + urllib.parse.urlencode({"filter[bundleId]": base})).get("data", [])
+    app = next((a for a in apps if a["attributes"]["bundleId"] == base), None)
+    if app is None:
+        die("no App Store Connect app for %s (Apps > + > New App)" % base)
+    query = urllib.parse.urlencode({"filter[app]": app["id"], "filter[version]": args.build_number, "limit": 1})
+    deadline = time.time() + args.minutes * 60
+    last = None
+    while True:
+        builds = client.request("GET", "/builds?" + query).get("data", [])
+        state = builds[0]["attributes"]["processingState"] if builds else "NOT YET LISTED"
+        if state != last:
+            print("%s build %s: %s" % (time.strftime("%H:%M:%S"), args.build_number, state), flush=True)
+            last = state
+        if state == "VALID":
+            print("Build %s is processed and ready in TestFlight." % args.build_number)
+            return
+        if state in ("INVALID", "FAILED"):
+            die("Apple rejected build %s while processing it. The reasons are emailed to the account "
+                "holder (subject \"App Store Connect: ... has one or more issues\")." % args.build_number)
+        if time.time() > deadline:
+            print("::warning title=TestFlight::Build %s is still %s after %d minutes; check App Store Connect."
+                  % (args.build_number, state, args.minutes))
+            return
+        time.sleep(60)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -286,9 +318,13 @@ def main():
     prepare.add_argument("--label", default=str(int(time.time())), help="goes into the profile names")
     cleanup = sub.add_parser("cleanup")
     cleanup.add_argument("--out", required=True)
+    wait_build = sub.add_parser("wait-build")
+    wait_build.add_argument("--build-number", required=True, help="CFBundleVersion of the upload")
+    wait_build.add_argument("--minutes", type=int, default=40)
     args = parser.parse_args()
     client = Client()
-    {"setup": cmd_setup, "prepare": cmd_prepare, "cleanup": cmd_cleanup}[args.command](client, args)
+    {"setup": cmd_setup, "prepare": cmd_prepare, "cleanup": cmd_cleanup,
+     "wait-build": cmd_wait_build}[args.command](client, args)
 
 
 if __name__ == "__main__":
