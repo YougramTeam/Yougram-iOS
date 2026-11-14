@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <title>Bubble</title>
+    <!-- Chat bubble with the Yougram "Y" cut out (even-odd hole), so the layer behind shows through in every appearance. -->
+    <g id="Bubble" stroke="none" fill="none" fill-rule="evenodd" transform="translate(512 512) scale(1.08) translate(-512 -512)">
+        <path d="M277,577.5 A250,250 0 1,1 426.5,727 L310.7,775.8 Q296,782 294.5,766.1 Z M407.73,427.87 A37,37 0 0,1 464.27,380.13 L512,436.65 L559.73,380.13 A37,37 0 0,1 616.27,427.87 L549,507.53 L549,602 A37,37 0 0,1 475,602 L475,507.53 Z" id="Bubble-Y" fill="#FFFFFF"></path>
+    </g>
+</svg>

@@ -7892,6 +7892,8 @@ Sorry for the inconvenience.";
 "Appearance.AppIconPremium" = "Premium";
 "Appearance.AppIconBlack" = "Black";
 "Appearance.AppIconTurbo" = "Turbo";
+"Appearance.AppIconHolo" = "Holo";
+"Appearance.AppIconPixel" = "Pixel";
 
 "PrivacySettings.DeleteAccountNow" = "Delete Account Now";
 

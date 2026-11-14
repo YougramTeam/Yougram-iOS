@@ -927,7 +927,6 @@ struct PremiumIntroConfiguration {
             .messagePrivacy,
             .advancedChatManagement,
             .noAds,
-            .appIcons,
             .uniqueReactions,
             .animatedUserpics,
             .premiumStickers,
@@ -971,7 +970,9 @@ struct PremiumIntroConfiguration {
             if perks.count < 4 {
                 perks = PremiumIntroConfiguration.defaultValue.perks
             }
-            
+            // Yougram's app icons are all free, so the Premium "app icons" perk has nothing to show.
+            perks.removeAll(where: { $0 == .appIcons })
+
             #if DEBUG
             if !perks.contains(.richText) {
                 perks.insert(.richText, at: 1)

@@ -327,16 +327,11 @@ filegroup(
 )
 
 alternate_icon_folders = [
-    "BlackIcon",
-    "BlackClassicIcon",
-    "BlackFilledIcon",
-    "BlueIcon",
-    "BlueClassicIcon",
-    "BlueFilledIcon",
-    "WhiteFilledIcon",
-    "New1",
-    "New2",
-    "Premium",
+    "Purple",
+    "Aqua",
+    "Sunset",
+    "Holo",
+    "Pixel",
     "PremiumBlack",
     "PremiumTurbo",
 ]
@@ -641,7 +636,7 @@ plist_fragment(
     template =
     """
     <key>CFBundleDisplayName</key>
-    <string>Telegram</string>
+    <string>Yougram</string>
     """
 )
 
@@ -1696,7 +1691,7 @@ plist_fragment(
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Telegram</string>
+    <string>Yougram</string>
     <key>CFBundleIdentifier</key>
     <string>{telegram_bundle_id}</string>
     <key>CFBundleName</key>
@@ -1758,7 +1753,7 @@ plist_fragment(
     <key>NSCameraUsageDescription</key>
     <string>We need this so that you can take and share photos and videos.</string>
     <key>NSContactsUsageDescription</key>
-    <string>Telegram stores your contacts heavily encrypted in the cloud to let you connect with your friends across all your devices.</string>
+    <string>Yougram stores your contacts heavily encrypted in the cloud to let you connect with your friends across all your devices.</string>
     <key>NSFaceIDUsageDescription</key>
     <string>You can use Face ID to unlock the app.</string>
     <key>NSLocationAlwaysUsageDescription</key>
@@ -1853,10 +1848,10 @@ plist_fragment(
                 <string>public.data</string>
             </array>
             <key>UTTypeDescription</key>
-            <string>Telegram iOS Color Theme File</string>
+            <string>Yougram iOS Color Theme File</string>
             <key>UTTypeIconFiles</key>
             <array>
-                <string>BlueIcon@3x.png</string>
+                <string>Purple@3x.png</string>
             </array>
             <key>UTTypeIdentifier</key>
             <string>org.telegram.Telegram-iOS.theme</string>

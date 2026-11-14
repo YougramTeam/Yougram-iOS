@@ -250,17 +250,8 @@ class UpdateInfoItemNode: ListViewItemNode {
                         strongSelf.backgroundNode.backgroundColor = itemBackgroundColor
                         strongSelf.highlightedBackgroundNode.backgroundColor = item.theme.list.itemHighlightedBackgroundColor
                         
-                        var bordered = true
-                        if let appIcon = item.appIcon {
-                            switch appIcon.name {
-                                case "BlueFilled":
-                                    bordered = false
-                                case "BlackFilled":
-                                    bordered = false
-                                default:
-                                    break
-                            }
-                        }
+                        // Every Yougram app icon is full-bleed colour, so none needs the light-icon border.
+                        let bordered = item.appIcon == nil
                         
                         strongSelf.overlayNode.image = generateBorderImage(theme: item.theme, bordered: bordered)
                     }

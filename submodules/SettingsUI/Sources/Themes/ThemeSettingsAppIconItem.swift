@@ -385,30 +385,19 @@ class ThemeSettingsAppIconItemNode: ListViewItemNode, ItemListItemNode {
                             let selected = icon.name == item.currentIconName
 
                             var name = "Icon"
-                            var bordered = true
+                            // Every Yougram icon is full-bleed colour, so none needs the light-icon border.
+                            let bordered = false
                             switch icon.name {
-                                case "BlueIcon":
+                                case "Purple":
                                     name = item.strings.Appearance_AppIconDefault
-                                case "BlackIcon":
-                                    name = item.strings.Appearance_AppIconDefaultX
-                                case "BlueClassicIcon":
-                                    name = item.strings.Appearance_AppIconClassic
-                                case "BlackClassicIcon":
-                                    name = item.strings.Appearance_AppIconClassicX
-                                case "BlueFilledIcon":
-                                    name = item.strings.Appearance_AppIconFilled
-                                    bordered = false
-                                case "BlackFilledIcon":
-                                    name = item.strings.Appearance_AppIconFilledX
-                                    bordered = false
-                                case "WhiteFilled":
-                                    name = "⍺ White"
-                                case "New1":
-                                    name = item.strings.Appearance_AppIconNew1
-                                case "New2":
+                                case "Aqua":
                                     name = item.strings.Appearance_AppIconNew2
-                                case "Premium":
-                                    name = item.strings.Appearance_AppIconPremium
+                                case "Sunset":
+                                    name = item.strings.Appearance_AppIconNew1
+                                case "Holo":
+                                    name = item.strings.Appearance_AppIconHolo
+                                case "Pixel":
+                                    name = item.strings.Appearance_AppIconPixel
                                 case "PremiumBlack":
                                     name = item.strings.Appearance_AppIconBlack
                                 case "PremiumTurbo":
