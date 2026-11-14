@@ -5,7 +5,7 @@
            they need. Idempotent. Run once (the "App Store setup" workflow does).
   prepare  Create a fresh Apple Distribution certificate (key and CSR made here) and an App Store
            profile per App ID, and write what Make.py's --codesigningInformationPath expects:
-           <out>/profiles/*.mobileprovision, <out>/certs/Signing.p12 (empty password), and
+           <out>/profiles/*.mobileprovision, <out>/certs/Signing.p12 (password P12_PASSWORD), and
            <out>/state.json with the team id and what to delete afterwards.
   cleanup  Revoke that certificate and delete those profiles (always run after a build).
 
@@ -176,11 +176,29 @@ def _run(*args):
     return p.stdout
 
 
+# The .p12 only lives on the runner for one build. It has a password because macOS `security
+# import` silently imports nothing from an empty-password PKCS#12 (run 43637857707: the build then
+# failed at set-key-partition-list, "The specified item could not be found in the keychain").
+P12_PASSWORD = "yougram-ci"
+
+
 def _make_p12(key_pem, cert_pem, out_path):
-    """A PKCS#12 with an empty password that macOS `security import` reads (OpenSSL 3 needs -legacy)."""
-    base = ["openssl", "pkcs12", "-export", "-inkey", key_pem, "-in", cert_pem, "-out", out_path, "-passout", "pass:"]
-    if subprocess.run(base + ["-legacy"], capture_output=True).returncode != 0:
-        _run(*base)
+    """A PKCS#12 macOS `security import` reads: SHA1/3DES, as Keychain Access writes them.
+
+    OpenSSL 3's defaults (AES, PBKDF2, a SHA-256 MAC) are not readable on every macOS, and the
+    `openssl` on PATH may be OpenSSL 3 (Homebrew) or LibreSSL (/usr/bin), which lacks -macalg
+    and -legacy, so the variants are tried in order.
+    """
+    base = ["openssl", "pkcs12", "-export", "-inkey", key_pem, "-in", cert_pem, "-out", out_path,
+            "-name", "Yougram CI", "-passout", "pass:" + P12_PASSWORD]
+    pbe = ["-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES"]
+    errors = []
+    for extra in (pbe + ["-macalg", "sha1"], pbe, ["-legacy"]):
+        p = subprocess.run(base + extra, capture_output=True, text=True)
+        if p.returncode == 0:
+            return
+        errors.append(p.stderr.strip())
+    die("openssl pkcs12 -export failed:\n" + "\n".join(errors))
 
 
 def cmd_prepare(client, args):
@@ -222,6 +240,9 @@ def cmd_prepare(client, args):
         f.write("\n".join(encoded[i:i + 64] for i in range(0, len(encoded), 64)) + "\n")
         f.write("-----END CERTIFICATE-----\n")
     _make_p12(key_pem, cert_pem, os.path.join(out, "certs", "Signing.p12"))
+    for path in (key_pem, csr_pem, cert_pem):
+        os.remove(path)
+    os.rmdir(work)
     print("created certificate %s (%s)" % (certificate["id"], certificate["attributes"].get("name", "")))
 
     # One App Store profile per App ID, named so a leftover is recognisable.

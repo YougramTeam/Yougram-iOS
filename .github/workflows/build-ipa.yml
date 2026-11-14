@@ -140,6 +140,8 @@ jobs:
           python3 build-system/yougram-signing/asc.py prepare --out "$SIGNING_DIR" --label "run $GITHUB_RUN_ID"
           echo "TEAM_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["team_id"])' "$SIGNING_DIR/state.json")" >> "$GITHUB_ENV"
           echo "CODESIGNING_DIR=$SIGNING_DIR" >> "$GITHUB_ENV"
+          bash .github/scripts/import_signing_identity.sh "$SIGNING_DIR/certs/Signing.p12" \
+            "$(python3 -c 'import sys; sys.path.insert(0, "build-system/yougram-signing"); import asc; print(asc.P12_PASSWORD)')"
 
       - name: Use placeholder signing
         if: inputs.signing != 'testflight'
@@ -148,6 +150,7 @@ jobs:
           cp -R build-system/yougram-codesigning/profiles "$SIGNING_DIR/profiles"
           cp -R build-system/fake-codesigning/certs "$SIGNING_DIR/certs"
           echo "CODESIGNING_DIR=$SIGNING_DIR" >> "$GITHUB_ENV"
+          python3 build-system/Make/ImportCertificates.py --path "$SIGNING_DIR/certs"
 
       - name: Write build configuration
         env:
@@ -217,7 +220,6 @@ jobs:
         timeout-minutes: ${{ inputs.build_minutes }}
         run: |
           df -h /
-          python3 build-system/Make/ImportCertificates.py --path "$CODESIGNING_DIR/certs"
           python3 -u build-system/Make/Make.py \
             --overrideXcodeVersion \
             --cacheDir="$DISK_CACHE" \
