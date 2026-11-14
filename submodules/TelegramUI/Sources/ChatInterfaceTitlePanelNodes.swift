@@ -111,6 +111,19 @@ func titlePanelForChatPresentationInterfaceState(_ chatPresentationInterfaceStat
         }
     }
     
+    // Yougram: a chat kept after a ban or a removal says so above the messages stored on the device. Like the
+    // peer-verification bar it takes the place of the other title panels; a banned channel loses its pinned
+    // message anyway, with the cached data its first failed getFullChannel replaces.
+    if !inhibitTitlePanelDisplay, chatKeptAfterRemovalBannerText(chatPresentationInterfaceState) != nil {
+        if let currentPanel = currentPanel as? ChatKeptAfterRemovalTitlePanelNode {
+            return currentPanel
+        } else {
+            let panel = ChatKeptAfterRemovalTitlePanelNode()
+            panel.interfaceInteraction = interfaceInteraction
+            return panel
+        }
+    }
+    
     if let _ = chatPresentationInterfaceState.peerVerification {
         if let currentPanel = currentPanel as? ChatVerifiedPeerTitlePanelNode {
             return currentPanel

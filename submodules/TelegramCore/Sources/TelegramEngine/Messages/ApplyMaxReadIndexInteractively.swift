@@ -47,7 +47,10 @@ func _internal_applyMaxReadMessageIdInteractively(postbox: Postbox, stateManager
 func _internal_applyMaxReadIndexInteractively(transaction: Transaction, stateManager: AccountStateManager, index: MessageIndex) {
     // A channel the account is not a member of has no read state on the server
     // (NonMemberChannelReadState.swift): nothing moves locally and no push is queued.
-    guard peerKeepsReadState(transaction.getPeer(index.id.peerId)) else {
+    // Yougram: a chat kept after a ban still holds the read state it had when the ban arrived, so reading it moves
+    // that state locally; the synchronizer confirms what this queues without sending it (`synchronizePeerReadState`).
+    let readPeer = transaction.getPeer(index.id.peerId)
+    guard peerKeepsReadState(readPeer) || channelIsKeptAfterBan(transaction: transaction, peer: readPeer) else {
         return
     }
     let messageIds = transaction.applyInteractiveReadMaxIndex(index)
@@ -359,8 +362,8 @@ func _internal_readPeerHistoryToTopInteractively(transaction: Transaction, peer:
     }
     var readIndex = topIndex
     // A channel the account is not a member of holds `nonMemberChannelReadState`, whose `maxKnownId` means
-    // "everything", not a message.
-    if principalNamespace == Namespaces.Message.Cloud, peerKeepsReadState(peer), let states = transaction.getPeerReadStates(peer.id) {
+    // "everything", not a message. Yougram: a chat kept after a ban holds the server's last state instead.
+    if principalNamespace == Namespaces.Message.Cloud, peerKeepsReadState(peer) || channelIsKeptAfterBan(transaction: transaction, peer: peer), let states = transaction.getPeerReadStates(peer.id) {
         for (namespace, state) in states where namespace == Namespaces.Message.Cloud {
             if case let .idBased(maxIncomingReadId, _, maxKnownId, _, _) = state, maxKnownId < Int32.max - 1 {
                 // Never below the current mark: a read lower than it would move the mark back.

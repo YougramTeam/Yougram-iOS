@@ -51,6 +51,9 @@ public final class PasscodeSetupController: ViewController {
     
     public var complete: ((String, Bool) -> Void)?
     var authenticationCompleted: ((Result<PasscodeSession, PasscodeError>) -> Void)?
+    /// Off hides "Passcode Options", so the code keeps the kind given in `.setup` (Yougram's
+    /// duress code has to be of the passcode's kind). Set before the screen loads.
+    public var allowsPasscodeTypeChange = true
 
     private let authentication: SettingsPasscodeAuthentication?
     private let authenticationDisposables = DisposableSet()
@@ -122,7 +125,8 @@ public final class PasscodeSetupController: ViewController {
     override public func loadDisplayNode() {
         self.displayNode = PasscodeSetupControllerNode(presentationData: self.presentationData, mode: self.mode, useCustomNumericKeyboard: self.useCustomNumericKeyboard)
         self.displayNodeDidLoad()
-        
+        self.controllerNode.allowsPasscodeTypeChange = self.allowsPasscodeTypeChange
+
         
         self.controllerNode.selectPasscodeMode = { [weak self] sourceNode in
             self?.openPasscodeModeMenu(sourceNode: sourceNode)
@@ -190,7 +194,7 @@ public final class PasscodeSetupController: ViewController {
     }
 
     private func openPasscodeModeMenu(sourceNode: HighlightableButtonNode) {
-        guard !self.isLeavingNavigation, self.passcodeModeContextController == nil,
+        guard !self.isLeavingNavigation, self.passcodeModeContextController == nil, self.allowsPasscodeTypeChange,
               case let .setup(change, selectedType) = self.mode else { return }
 
         let strings = self.presentationData.strings

@@ -334,6 +334,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
             try self.storage.write(PasscodeCrypto.random(32), account: "device", biometric: false)
             let record = Record(id: UUID().uuidString, managedPasscode: true, unprotectedKey: try PasscodeCrypto.random(32))
             try self.save(record)
+            try? self.storage.remove(Self.duressAccount)
             self.expectsCredential = false
         }
     }
@@ -348,6 +349,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
             try self.storage.remove("attempts")
             try self.storage.remove("device")
             try self.storage.remove("credential")
+            try? self.storage.remove(Self.duressAccount)
             self.expectsCredential = false
             try then()
         }
@@ -591,6 +593,8 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
         try self.storage.remove("attempts")
         try self.save(record)
         committed = true
+        // A new passcode drops the duress code: it may be of another kind now, or equal to it.
+        try? self.storage.remove(Self.duressAccount)
         if let access, (try? access.withKey { _ in true }) != true { session?.invalidate() }
         PasscodeSession.invalidateAll(except: session)
         if Task.isCancelled { session?.invalidate() }
@@ -634,6 +638,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
             record.revision &+= 1
             try self.storage.remove("attempts")
             try self.save(record)
+            try? self.storage.remove(Self.duressAccount)
             PasscodeSession.invalidateAll()
             try self.cleanupBiometrics(record: &record)
         }
@@ -718,5 +723,106 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
             access.invalidate()
             throw error
         }
+    }
+}
+
+// MARK: - Yougram duress code
+
+public enum PasscodeDuressError: Error, Equatable {
+    /// The code is the passcode itself.
+    case matchesPasscode
+}
+
+/// Yougram's duress code: a second code for the app lock screen, where entering it runs
+/// `AppLockContext.duressCodeHandler` instead of unlocking. The lock screen checks it only after
+/// the passcode was rejected, so the passcode always unlocks.
+///
+/// Stored as its own keychain item (`duress`) next to the credential: a salted PBKDF2 key,
+/// derived like the passcode's with the device secret, that opens a fixed payload. It is bound to
+/// the credential record and its kind, and setting a new passcode, disabling it or resetting the
+/// credential removes it.
+@available(macOS 10.15, *)
+extension PasscodeCredentialStore {
+    fileprivate static let duressAccount = "duress"
+    private static let duressPayload = Data("yougram.duress.v1".utf8)
+
+    private struct DuressRecord: Codable {
+        var credentialId: String
+        var kind: PasscodeKind
+        var salt: Data
+        var iterations: Int
+        var verifier: Data
+    }
+
+    private static func duressContext(credentialId: String, kind: PasscodeKind) -> String {
+        return "duress.v1:\(credentialId):\(kind.rawValue)"
+    }
+
+    /// The stored duress code, when it still belongs to the current passcode.
+    private func currentDuressRecord(credential: Record) -> DuressRecord? {
+        guard let kind = credential.kind,
+              let data = try? self.storage.read(Self.duressAccount, context: nil),
+              let duress = try? JSONDecoder().decode(DuressRecord.self, from: data),
+              duress.credentialId == credential.id, duress.kind == kind else {
+            return nil
+        }
+        return duress
+    }
+
+    /// Whether a duress code is set for the current passcode.
+    public func hasDuressCode() -> Bool {
+        return (try? self.serialized { () throws -> Bool in
+            guard let record = try self.load() else { return false }
+            return self.currentDuressRecord(credential: record) != nil
+        }) ?? false
+    }
+
+    /// Sets the duress code, which must be of the passcode's kind and differ from it. Needs a
+    /// session from entering the passcode in settings.
+    public func setDuressCode(_ code: String, session: PasscodeSession) throws {
+        try self.requirePasscodeManagement(session)
+        try self.serialized {
+            let record = try self.validatedRecord(session)
+            guard let kind = record.kind, let salt = record.salt, let iterations = record.iterations, let wrapped = record.wrappedKey else {
+                throw PasscodeError.authenticationRequired
+            }
+            let code = kind.normalize(code)
+            guard !code.isEmpty,
+                  kind == .alphanumeric || (code.allSatisfy { $0.isASCII && $0.isNumber } && code.count == (kind == .digits6 ? 6 : 4)) else {
+                throw PasscodeError.invalidCode
+            }
+            let deviceSecret = try self.deviceSecret()
+            // The passcode's own key opens the credential: then this code is the passcode.
+            var passcodeKey = try PasscodeCrypto.derive(code: code, deviceSecret: deviceSecret, salt: salt, iterations: iterations)
+            defer { passcodeKey.resetBytes(in: 0 ..< passcodeKey.count) }
+            if (try? PasscodeCrypto.open(wrapped, key: passcodeKey, context: "credential.v1:\(record.id):\(kind.rawValue)")) != nil {
+                throw PasscodeDuressError.matchesPasscode
+            }
+            let duressSalt = try PasscodeCrypto.random(16)
+            let duressIterations = self.iterationCount()
+            var key = try PasscodeCrypto.derive(code: code, deviceSecret: deviceSecret, salt: duressSalt, iterations: duressIterations)
+            defer { key.resetBytes(in: 0 ..< key.count) }
+            let verifier = try PasscodeCrypto.seal(Self.duressPayload, key: key, context: Self.duressContext(credentialId: record.id, kind: kind))
+            let duress = DuressRecord(credentialId: record.id, kind: kind, salt: duressSalt, iterations: duressIterations, verifier: verifier)
+            try self.storage.write(JSONEncoder().encode(duress), account: Self.duressAccount, biometric: false)
+        }
+    }
+
+    public func removeDuressCode() throws {
+        try self.serialized {
+            try self.storage.remove(Self.duressAccount)
+        }
+    }
+
+    /// Whether `code` is the duress code. Never counts as a failed passcode attempt.
+    public func matchesDuressCode(_ code: String) -> Bool {
+        return (try? self.serialized { () throws -> Bool in
+            guard let record = try self.load(), let duress = self.currentDuressRecord(credential: record) else {
+                return false
+            }
+            var key = try PasscodeCrypto.derive(code: duress.kind.normalize(code), deviceSecret: self.deviceSecret(), salt: duress.salt, iterations: duress.iterations)
+            defer { key.resetBytes(in: 0 ..< key.count) }
+            return (try? PasscodeCrypto.open(duress.verifier, key: key, context: Self.duressContext(credentialId: record.id, kind: duress.kind))) == Self.duressPayload
+        }) ?? false
     }
 }

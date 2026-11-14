@@ -916,6 +916,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
                         })
                     })))
                 }
+                if !(message.isCopyProtected() || isCopyProtected) && !message.containsSecretMedia {
+                    items.append(contentsOf: strongSelf.sharedMediaSaveContextMenuItems(message: message))
+                }
                 if actions.options.contains(.deleteLocally) || actions.options.contains(.deleteGlobally) {
                     let context = strongSelf.context
                     let presentationData = strongSelf.presentationData
@@ -1040,6 +1043,10 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
                                     }
                                 })
                             })))
+                        }
+                        
+                        if !(message.isCopyProtected() || isCopyProtected) && !message.containsSecretMedia {
+                            items.append(contentsOf: strongSelf.sharedMediaSaveContextMenuItems(message: message))
                         }
                         
                         if actions.options.contains(.deleteLocally) || actions.options.contains(.deleteGlobally) {

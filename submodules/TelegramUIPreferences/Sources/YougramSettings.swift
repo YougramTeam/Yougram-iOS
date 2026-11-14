@@ -19,6 +19,14 @@ public struct YougramSettings: Codable, Equatable {
     public var hideAccountNameInNotifications: Bool
     public var hideAds: Bool
 
+    // MARK: Passcode
+    /// The lock screen's digit keys change places every time it appears.
+    public var scramblePasscodeKeypad: Bool
+    /// Entering the duress code also deletes the accounts backup from the keychain.
+    public var duressDeleteBackup: Bool
+    /// Entering the duress code also logs the accounts out on Telegram's servers, not only on this device.
+    public var duressTerminateSessions: Bool
+
     // MARK: Accounts
     public var autoBackupAccounts: Bool
 
@@ -34,6 +42,9 @@ public struct YougramSettings: Codable, Equatable {
     public var discussionGroupButton: Bool
     /// Message context menu actions the user switched off (`YougramContextMenuAction.rawValue`).
     public var hiddenContextMenuActions: [String]
+    /// A group or channel the user was banned or removed from stays in the chat list with the
+    /// messages already on this device (`YougramCoreOptions.keepChatsAfterRemoval`).
+    public var keepChatsAfterBan: Bool
 
     // MARK: Chat list and folders
     public var compactChatList: Bool
@@ -65,6 +76,9 @@ public struct YougramSettings: Codable, Equatable {
             hidePhoneInSettings: false,
             hideAccountNameInNotifications: false,
             hideAds: true,
+            scramblePasscodeKeypad: false,
+            duressDeleteBackup: true,
+            duressTerminateSessions: false,
             autoBackupAccounts: false,
             quickFormattingPanel: false,
             localVoiceTranscription: true,
@@ -76,6 +90,7 @@ public struct YougramSettings: Codable, Equatable {
             disableAutoNextTopic: false,
             discussionGroupButton: true,
             hiddenContextMenuActions: [],
+            keepChatsAfterBan: true,
             compactChatList: false,
             hideAllChatsFolder: false,
             foldersAtBottom: false,
@@ -98,6 +113,9 @@ public struct YougramSettings: Codable, Equatable {
         hidePhoneInSettings: Bool,
         hideAccountNameInNotifications: Bool,
         hideAds: Bool,
+        scramblePasscodeKeypad: Bool,
+        duressDeleteBackup: Bool,
+        duressTerminateSessions: Bool,
         autoBackupAccounts: Bool,
         quickFormattingPanel: Bool,
         localVoiceTranscription: Bool,
@@ -109,6 +127,7 @@ public struct YougramSettings: Codable, Equatable {
         disableAutoNextTopic: Bool,
         discussionGroupButton: Bool,
         hiddenContextMenuActions: [String],
+        keepChatsAfterBan: Bool,
         compactChatList: Bool,
         hideAllChatsFolder: Bool,
         foldersAtBottom: Bool,
@@ -128,6 +147,9 @@ public struct YougramSettings: Codable, Equatable {
         self.hidePhoneInSettings = hidePhoneInSettings
         self.hideAccountNameInNotifications = hideAccountNameInNotifications
         self.hideAds = hideAds
+        self.scramblePasscodeKeypad = scramblePasscodeKeypad
+        self.duressDeleteBackup = duressDeleteBackup
+        self.duressTerminateSessions = duressTerminateSessions
         self.autoBackupAccounts = autoBackupAccounts
         self.quickFormattingPanel = quickFormattingPanel
         self.localVoiceTranscription = localVoiceTranscription
@@ -139,6 +161,7 @@ public struct YougramSettings: Codable, Equatable {
         self.disableAutoNextTopic = disableAutoNextTopic
         self.discussionGroupButton = discussionGroupButton
         self.hiddenContextMenuActions = hiddenContextMenuActions
+        self.keepChatsAfterBan = keepChatsAfterBan
         self.compactChatList = compactChatList
         self.hideAllChatsFolder = hideAllChatsFolder
         self.foldersAtBottom = foldersAtBottom
@@ -158,8 +181,10 @@ public struct YougramSettings: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case hidePhoneInSettings, hideAccountNameInNotifications, hideAds, autoBackupAccounts
+        case scramblePasscodeKeypad, duressDeleteBackup, duressTerminateSessions
         case quickFormattingPanel, localVoiceTranscription, sendHDPhotos, hdPhotosFromClipboard, hideReactions
         case standardEmojiFirst, disableRecordingHints, disableAutoNextTopic, discussionGroupButton, hiddenContextMenuActions
+        case keepChatsAfterBan
         case compactChatList, hideAllChatsFolder, foldersAtBottom, rememberLastFolder, compactFolderTabs, keepBottomSearch
         case showContactsTab, showTabLabels
         case hideStories, disableStorySwipe, hideRepostToStory
@@ -176,6 +201,9 @@ public struct YougramSettings: Codable, Equatable {
         self.hidePhoneInSettings = bool(.hidePhoneInSettings, d.hidePhoneInSettings)
         self.hideAccountNameInNotifications = bool(.hideAccountNameInNotifications, d.hideAccountNameInNotifications)
         self.hideAds = bool(.hideAds, d.hideAds)
+        self.scramblePasscodeKeypad = bool(.scramblePasscodeKeypad, d.scramblePasscodeKeypad)
+        self.duressDeleteBackup = bool(.duressDeleteBackup, d.duressDeleteBackup)
+        self.duressTerminateSessions = bool(.duressTerminateSessions, d.duressTerminateSessions)
         self.autoBackupAccounts = bool(.autoBackupAccounts, d.autoBackupAccounts)
         self.quickFormattingPanel = bool(.quickFormattingPanel, d.quickFormattingPanel)
         self.localVoiceTranscription = bool(.localVoiceTranscription, d.localVoiceTranscription)
@@ -187,6 +215,7 @@ public struct YougramSettings: Codable, Equatable {
         self.disableAutoNextTopic = bool(.disableAutoNextTopic, d.disableAutoNextTopic)
         self.discussionGroupButton = bool(.discussionGroupButton, d.discussionGroupButton)
         self.hiddenContextMenuActions = ((try? c.decodeIfPresent([String].self, forKey: .hiddenContextMenuActions)) ?? nil) ?? d.hiddenContextMenuActions
+        self.keepChatsAfterBan = bool(.keepChatsAfterBan, d.keepChatsAfterBan)
         self.compactChatList = bool(.compactChatList, d.compactChatList)
         self.hideAllChatsFolder = bool(.hideAllChatsFolder, d.hideAllChatsFolder)
         self.foldersAtBottom = bool(.foldersAtBottom, d.foldersAtBottom)
@@ -209,6 +238,9 @@ public struct YougramSettings: Codable, Equatable {
         try c.encode(self.hidePhoneInSettings, forKey: .hidePhoneInSettings)
         try c.encode(self.hideAccountNameInNotifications, forKey: .hideAccountNameInNotifications)
         try c.encode(self.hideAds, forKey: .hideAds)
+        try c.encode(self.scramblePasscodeKeypad, forKey: .scramblePasscodeKeypad)
+        try c.encode(self.duressDeleteBackup, forKey: .duressDeleteBackup)
+        try c.encode(self.duressTerminateSessions, forKey: .duressTerminateSessions)
         try c.encode(self.autoBackupAccounts, forKey: .autoBackupAccounts)
         try c.encode(self.quickFormattingPanel, forKey: .quickFormattingPanel)
         try c.encode(self.localVoiceTranscription, forKey: .localVoiceTranscription)
@@ -220,6 +252,7 @@ public struct YougramSettings: Codable, Equatable {
         try c.encode(self.disableAutoNextTopic, forKey: .disableAutoNextTopic)
         try c.encode(self.discussionGroupButton, forKey: .discussionGroupButton)
         try c.encode(self.hiddenContextMenuActions, forKey: .hiddenContextMenuActions)
+        try c.encode(self.keepChatsAfterBan, forKey: .keepChatsAfterBan)
         try c.encode(self.compactChatList, forKey: .compactChatList)
         try c.encode(self.hideAllChatsFolder, forKey: .hideAllChatsFolder)
         try c.encode(self.foldersAtBottom, forKey: .foldersAtBottom)
@@ -246,11 +279,19 @@ public struct YougramSettings: Codable, Equatable {
     private static let lock = NSLock()
     private static let mirrorKey = "yougram.settings.v1"
     private static var cached: YougramSettings = {
-        if let data = UserDefaults.standard.data(forKey: mirrorKey), let value = try? JSONDecoder().decode(YougramSettings.self, from: data) {
-            return value
+        var value = YougramSettings.defaultSettings
+        if let data = UserDefaults.standard.data(forKey: mirrorKey), let decoded = try? JSONDecoder().decode(YougramSettings.self, from: data) {
+            value = decoded
         }
-        return .defaultSettings
+        applyCoreOptions(value)
+        return value
     }()
+
+    /// What TelegramCore follows itself (see `YougramCoreOptions`). Set before any account starts:
+    /// `SharedAccountContextImpl.init` reads `current` before it loads the accounts.
+    private static func applyCoreOptions(_ value: YougramSettings) {
+        YougramCoreOptions.keepChatsAfterRemoval = value.keepChatsAfterBan
+    }
     private static let updatesPipe = ValuePipe<YougramSettings>()
 
     /// The current settings. Safe to read from any thread, including layout code.
@@ -276,6 +317,7 @@ public struct YougramSettings: Codable, Equatable {
         let changed = cached != value
         cached = value
         lock.unlock()
+        applyCoreOptions(value)
         if changed {
             if let data = try? JSONEncoder().encode(value) {
                 UserDefaults.standard.set(data, forKey: mirrorKey)

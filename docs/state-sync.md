@@ -899,6 +899,12 @@ Each: the rule; why; where enforced; what pins it.
     confirms a queued operation for one without sending it; `updatePeersCustom` queues a read-state validation when
     a stored channel becomes a member (`channelJoinNeedsServerReadState`). Pinned: `NonMemberChannelReadStateTests`
     (the helpers), `NonMemberChannelReplayTests` (the replay's skip, judged when each operation comes up).
+    Yougram's `YougramCoreOptions.keepChatsAfterRemoval` (off in the extensions and tests) keeps a channel or
+    supergroup the user was banned from in the chat list (`updatePeersCustom` leaves its inclusion, the exclusion
+    predicates in `UpdatePeers.swift` no longer exclude it). It is a non-member for every rule above, but opening it
+    installs no non-member state, so it keeps the read state it had when the ban arrived; interactive reads move that
+    state locally (`channelIsKeptAfterBan` in `ApplyMaxReadIndexInteractively.swift`) and `synchronizePeerReadState`
+    confirms what they queue without sending it. Pinned: none.
 
 ## Cost model
 

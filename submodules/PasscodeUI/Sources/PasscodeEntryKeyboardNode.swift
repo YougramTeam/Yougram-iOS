@@ -177,8 +177,12 @@ final class PasscodeEntryKeyboardNode: ASDisplayNode {
     private var background: PasscodeBackground?
 
     private let backgroundContainer = GlassBackgroundContainerView()
+    /// In digit order (`buttonsData`), whatever slot each one sits in.
     private var buttonNodes: [PasscodeEntryButtonNode] = []
-    
+    /// The button in each slot of the 3×3 grid plus the bottom middle key, as an index into
+    /// `buttonNodes`. The phone layout unless Yougram's scrambled keypad is on.
+    private var slotOrder: [Int] = Array(0 ..< buttonsData.count)
+
     var charactedEntered: ((String) -> Void)?
     var backspace: (() -> Void)?
 
@@ -186,8 +190,32 @@ final class PasscodeEntryKeyboardNode: ASDisplayNode {
         super.didLoad()
 
         self.view.addSubview(self.backgroundContainer)
-        for buttonNode in self.buttonNodes {
-            self.backgroundContainer.contentView.addSubview(buttonNode.view)
+        self.orderButtonViews()
+    }
+
+    /// Yougram (Settings ▸ Yougram ▸ Privacy ▸ Scramble Passcode Keypad): shuffles which digit sits
+    /// in which slot. Callers lay the keypad out again afterwards.
+    func setScrambled(_ scrambled: Bool) {
+        let identity = Array(0 ..< buttonsData.count)
+        if scrambled {
+            var order = identity
+            repeat {
+                order.shuffle()
+            } while order == identity || order == self.slotOrder
+            self.slotOrder = order
+        } else {
+            self.slotOrder = identity
+        }
+        self.orderButtonViews()
+    }
+
+    /// Subviews in slot order, so VoiceOver reads the keys where they are on screen.
+    private func orderButtonViews() {
+        guard self.isNodeLoaded else {
+            return
+        }
+        for index in self.slotOrder where index < self.buttonNodes.count {
+            self.backgroundContainer.contentView.addSubview(self.buttonNodes[index].view)
         }
     }
 
@@ -217,10 +245,8 @@ final class PasscodeEntryKeyboardNode: ASDisplayNode {
                     self?.backspace?()
                 }
                 self.buttonNodes.append(buttonNode)
-                if self.isNodeLoaded {
-                    self.backgroundContainer.contentView.addSubview(buttonNode.view)
-                }
             }
+            self.orderButtonViews()
         }
     }
     
@@ -232,7 +258,8 @@ final class PasscodeEntryKeyboardNode: ASDisplayNode {
     }
     
     func animateIn() {
-        for (i, buttonNode) in self.buttonNodes.enumerated() {
+        for (i, index) in self.slotOrder.enumerated() where index < self.buttonNodes.count {
+            let buttonNode = self.buttonNodes[index]
             var delay: Double = 0.001
             if i / 3 == 1 {
                 delay = 0.05
@@ -279,7 +306,8 @@ final class PasscodeEntryKeyboardNode: ASDisplayNode {
             keyboardSize = layout.keyboard.size
         }
         
-        for (i, buttonNode) in self.buttonNodes.enumerated() {
+        for (i, index) in self.slotOrder.enumerated() where index < self.buttonNodes.count {
+            let buttonNode = self.buttonNodes[index]
             var origin = origin
             if i % 3 == 0 {
                 origin.x += 0.0

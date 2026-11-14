@@ -20,6 +20,7 @@ import TranslateUI
 import UndoUI
 import ContextUI
 import SaveToCameraRoll
+import LegacyMediaPickerUI
 import Pasteboard
 import ChatRichTextEditorComposer
 import AdUI
@@ -779,6 +780,15 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                                 return
                             }
                             controller.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .mediaSaved(text: strongSelf.presentationData.strings.Gallery_ImageSaved), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                        })
+                    })))
+
+                    // Under the same gate as "Save Image" above.
+                    items.append(.action(ContextMenuActionItem(text: self.presentationData.strings.Conversation_SaveToFiles, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Save"), color: theme.actionSheet.primaryTextColor) }, action: { [weak self] _, f in
+                        f(.default)
+
+                        let _ = exportMediaToFiles(context: context, userLocation: .peer(message.id.peerId), mediaReference: media, present: { [weak self] c, a in
+                            self?.galleryController()?.present(c, in: .window(.root), with: a)
                         })
                     })))
                 }

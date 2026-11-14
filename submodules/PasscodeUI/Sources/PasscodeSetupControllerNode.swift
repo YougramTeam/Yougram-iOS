@@ -7,6 +7,7 @@ import TelegramPresentationData
 import PasscodeInputFieldNode
 import ComponentFlow
 import WalletSendKeyboardComponent
+import TelegramUIPreferences
 
 enum PasscodeSetupInitialState {
     case createPasscode
@@ -25,6 +26,19 @@ final class PasscodeSetupControllerNode: ASDisplayNode {
     private let keyboard = ComponentView<Empty>()
     private var isCustomInputActive = true
     private var previousDisplaysCustomKeyboard: Bool?
+    /// Yougram's scrambled keypad (Settings ▸ Yougram ▸ Privacy) while asking for the current
+    /// passcode; one order for the screen's lifetime. nil is the phone layout.
+    private let digitOrder: [Int]?
+
+    /// Off for codes that must keep their kind (Yougram's duress code matches the passcode's).
+    var allowsPasscodeTypeChange = true {
+        didSet {
+            if !self.allowsPasscodeTypeChange {
+                self.modeButtonNode.isHidden = true
+                self.modeButtonNode.isAccessibilityElement = false
+            }
+        }
+    }
 
     private var displaysCustomKeyboard: Bool {
         guard self.useCustomNumericKeyboard else { return false }
@@ -67,7 +81,17 @@ final class PasscodeSetupControllerNode: ASDisplayNode {
         self.presentationData = presentationData
         self.mode = mode
         self.useCustomNumericKeyboard = useCustomNumericKeyboard
-        
+        if case .entry = mode, YougramSettings.current.scramblePasscodeKeypad {
+            let phoneOrder = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
+            var order = phoneOrder
+            repeat {
+                order.shuffle()
+            } while order == phoneOrder
+            self.digitOrder = order
+        } else {
+            self.digitOrder = nil
+        }
+
         self.wrapperNode = ASDisplayNode()
         
         self.titleNode = ASTextNode()
@@ -240,6 +264,7 @@ final class PasscodeSetupControllerNode: ASDisplayNode {
                 mode: .numeric,
                 deleteTitle: self.presentationData.strings.Common_Delete,
                 isEnabled: isEnabled,
+                digitOrder: self.digitOrder,
                 action: { [weak self] action in
                     guard let self, self.displaysCustomKeyboard, self.authenticationInputEnabled, self.isCustomInputActive, self.view.isUserInteractionEnabled else { return }
                     self.hapticFeedback.impact(.light)
@@ -367,8 +392,8 @@ final class PasscodeSetupControllerNode: ASDisplayNode {
                             self.titleNode.attributedText = NSAttributedString(string: self.presentationData.strings.EnterPasscode_EnterNewPasscodeChange, font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor)
                             self.subtitleNode.isHidden = false
                             self.subtitleNode.attributedText = NSAttributedString(string: self.presentationData.strings.PasscodeSettings_DoNotMatch, font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor)
-                            self.modeButtonNode.isHidden = false
-                            self.modeButtonNode.isAccessibilityElement = true
+                            self.modeButtonNode.isHidden = !self.allowsPasscodeTypeChange
+                            self.modeButtonNode.isAccessibilityElement = self.allowsPasscodeTypeChange
                             
                             UIAccessibility.post(notification: UIAccessibility.Notification.announcement, argument: self.presentationData.strings.PasscodeSettings_DoNotMatch)
                             

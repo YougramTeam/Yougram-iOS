@@ -28,6 +28,26 @@ Yougram's own options. The model is `YougramSettings` in
 `YougramEntriesBuilder`): main screen (header, Categories, Links), General, Appearance, Chats, Privacy, Message Menu.
 Toggles bind to a `WritableKeyPath<YougramSettings, Bool>`; `requiresRestart: true` shows a restart notice.
 
+## Passcode: scrambled keypad and duress code
+
+- **Scrambled keypad** (`scramblePasscodeKeypad`): the lock screen's `PasscodeEntryKeyboardNode.setScrambled` reorders
+  its slots (layout, entry animation and VoiceOver order follow `slotOrder`), dealt again each time the app returns to
+  the foreground and after a wrong code. The settings passcode prompt (`PasscodeSetupController` in `.entry` mode)
+  passes one shuffled `digitOrder` to `WalletSendKeyboardComponent` for the screen's lifetime; nil there is the phone
+  layout, so the wallet is unchanged.
+- **Duress code**: stored by `PasscodeCredentialStore` (`Passcode.swift`, "Yougram duress code") as keychain item
+  `duress` beside the credential, bound to the credential id and kind. Setting a passcode, disabling it or resetting the
+  credential removes it. **The lock screen checks it only after `verify` rejected the code**
+  (`PasscodeEntryController.verifyCode`), and only for the main app's own unlock (`.appUnlock`, no `authenticated` /
+  `completed` caller), so the passcode always unlocks and settings, wallet and share-extension prompts never trigger it.
+  A match calls `AppLockContext.duressCodeHandler`, which `AppDelegate` sets to `yougramPerformDuressWipe`
+  (`TelegramUI/Sources/YougramDuressWipe.swift`): accounts backup (optional), every account record removed, or marked
+  logged out with "Log Out on Telegram's Servers", then, once no account is active, `resetWalletLocalSecrets()` turns
+  the passcode off and the lock screen dismisses itself onto the login screen.
+- The duress screen (`YougramDuressCodeController.swift`) asks for the passcode, then takes the new code on
+  `PasscodeSetupController` with `allowsPasscodeTypeChange = false`, since the lock screen only accepts codes of the
+  passcode's kind.
+
 ## Accounts backup (`YougramAccountsBackup.swift`)
 
 - Each signed-in account's `AccountBackupData` (master DC id and auth key, notification key, other DC keys) is a

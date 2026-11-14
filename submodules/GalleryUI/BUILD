@@ -34,6 +34,7 @@ swift_library(
         "//submodules/ManagedAnimationNode:ManagedAnimationNode",
         "//submodules/ContextUI:ContextUI",
         "//submodules/SaveToCameraRoll:SaveToCameraRoll",
+        "//submodules/LegacyMediaPickerUI:LegacyMediaPickerUI",
         "//submodules/TelegramUIPreferences:TelegramUIPreferences",
         "//submodules/ImageContentAnalysis:ImageContentAnalysis",
         "//submodules/TextSelectionNode:TextSelectionNode",

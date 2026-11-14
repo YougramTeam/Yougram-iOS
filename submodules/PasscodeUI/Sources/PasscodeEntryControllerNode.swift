@@ -106,7 +106,8 @@ final class PasscodeEntryControllerNode: ASDisplayNode {
         
         self.backgroundColor = .clear
         self.iconNode.unlockedColor = theme.rootController.navigationBar.primaryTextColor
-        
+        self.keyboardNode.setScrambled(YougramSettings.current.scramblePasscodeKeypad)
+
         self.keyboardNode.charactedEntered = { [weak self] character in
             if let strongSelf = self {
                 strongSelf.inputFieldNode.append(character)
@@ -517,6 +518,16 @@ final class PasscodeEntryControllerNode: ASDisplayNode {
     
     func resetInput() {
         self.inputFieldNode.reset()
+    }
+
+    /// Yougram: deals the digit keys out again (Settings ▸ Yougram ▸ Privacy ▸ Scramble Passcode
+    /// Keypad), each time the screen comes back and after a wrong code. With the option off this
+    /// keeps the phone layout.
+    func reshuffleKeypad() {
+        self.keyboardNode.setScrambled(YougramSettings.current.scramblePasscodeKeypad)
+        if let validLayout = self.validLayout {
+            self.containerLayoutUpdated(validLayout, navigationBarHeight: 0.0, transition: .immediate)
+        }
     }
 
     /// VoiceOver order: the prompt, the field, the notice (when it shows text), then the keypad and its buttons. The

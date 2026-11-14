@@ -15,13 +15,29 @@ func isPeerHiddenByCollapsedCommunity(transaction: Transaction, peerId: PeerId, 
 /// Membership decides, not `in_news`. A joined channel appears everywhere, in News or not. A channel marked
 /// `in_news` without being joined is a light join (joinChannel for_news): it is followed in News and, like any
 /// channel the user is not a member of, stays out of Chats.
-func channelShouldBeExcludedFromChatList(_ channel: TelegramChannel, isHiddenByCollapsedCommunity: () -> Bool) -> Bool {
+///
+/// Yougram: with `keepsKickedChannels` (`YougramCoreOptions.keepChatsAfterRemoval`) a channel or supergroup the user
+/// was banned from is not excluded either, so it keeps the place it has in the chat list (`updatePeersCustom` leaves
+/// its inclusion as it was). A channel the user left is still excluded.
+func channelShouldBeExcludedFromChatList(_ channel: TelegramChannel, keepsKickedChannels: Bool = YougramCoreOptions.keepChatsAfterRemoval, isHiddenByCollapsedCommunity: () -> Bool) -> Bool {
     switch channel.participationStatus {
     case .member:
+        return isHiddenByCollapsedCommunity()
+    case .kicked where keepsKickedChannels:
         return isHiddenByCollapsedCommunity()
     default:
         return true
     }
+}
+
+/// Yougram: whether `peer` is a channel or supergroup the user was banned from that is kept in the chat list
+/// (`YougramCoreOptions.keepChatsAfterRemoval`). Such a chat still holds the read state it had when the ban arrived,
+/// as opening a chat in the chat list installs no non-member state (NonMemberChannelReadState.swift).
+func channelIsKeptAfterBan(transaction: Transaction, peer: Peer?) -> Bool {
+    guard YougramCoreOptions.keepChatsAfterRemoval, let channel = peer as? TelegramChannel, channel.participationStatus == .kicked else {
+        return false
+    }
+    return transaction.getPeerChatListIndex(channel.id) != nil
 }
 
 func shouldExcludePeerFromChatList(transaction: Transaction, peerId: PeerId, peer: Peer? = nil) -> Bool {
@@ -29,6 +45,9 @@ func shouldExcludePeerFromChatList(transaction: Transaction, peerId: PeerId, pee
         return false
     }
 
+    // Yougram: a basic group the user was removed from, and a channel or supergroup they were banned from, stay
+    // in the chat list with the messages stored on the device.
+    let keepsRemovedChats = YougramCoreOptions.keepChatsAfterRemoval
     if let group = peer as? TelegramGroup {
         if group.flags.contains(.deactivated) {
             return true
@@ -36,11 +55,13 @@ func shouldExcludePeerFromChatList(transaction: Transaction, peerId: PeerId, pee
         switch group.membership {
         case .Member:
             return false
+        case .Removed where keepsRemovedChats:
+            return false
         default:
             return true
         }
     } else if let channel = peer as? TelegramChannel {
-        return channelShouldBeExcludedFromChatList(channel, isHiddenByCollapsedCommunity: {
+        return channelShouldBeExcludedFromChatList(channel, keepsKickedChannels: keepsRemovedChats, isHiddenByCollapsedCommunity: {
             return isPeerHiddenByCollapsedCommunity(transaction: transaction, peerId: peerId, peer: channel)
         })
     } else if let community = peer as? TelegramCommunity {
@@ -326,6 +347,10 @@ public func updatePeersCustom(transaction: Transaction, peers: [Peer], update: (
             updated = TelegramUser.merge(lhs: previous, rhs: updatedUser)
         }
         
+        if let previous = previous as? TelegramGroup, let updatedGroup = updated as? TelegramGroup, YougramCoreOptions.keepChatsAfterRemoval {
+            updated = mergeGroupKeepingDisplayAfterRemoval(lhs: previous, rhs: updatedGroup)
+        }
+        
         if let updatedChannel = updated as? TelegramChannel {
             var wasMember = false
             var wasHidden: Bool?
@@ -394,6 +419,10 @@ public func updatePeersCustom(transaction: Transaction, peers: [Peer], update: (
                         switch group.membership {
                             case .Member:
                                 updatePeerChatInclusionWithMinTimestamp(transaction: transaction, id: peerId, minTimestamp: group.creationDate, forceRootGroupIfNotExists: false, peer: group)
+                            case .Removed where YougramCoreOptions.keepChatsAfterRemoval:
+                                // Yougram: removed from the group, it keeps the inclusion it has (a chat the
+                                // user had already deleted stays out).
+                                break
                             default:
                                 transaction.updatePeerChatListInclusion(peerId, inclusion: .notIncluded)
                         }
@@ -409,6 +438,10 @@ public func updatePeersCustom(transaction: Transaction, peers: [Peer], update: (
                             updatePeerChatInclusionWithMinTimestamp(transaction: transaction, id: peerId, minTimestamp: channel.creationDate, forceRootGroupIfNotExists: true, peer: channel)
                         case .left:
                             transaction.updatePeerChatListInclusion(peerId, inclusion: .notIncluded)
+                        case .kicked where YougramCoreOptions.keepChatsAfterRemoval:
+                            // Yougram: banned, it keeps the inclusion it has (a chat the user had left or
+                            // deleted stays out).
+                            break
                         case .kicked where channel.creationDate == 0:
                             transaction.updatePeerChatListInclusion(peerId, inclusion: .notIncluded)
                         default:

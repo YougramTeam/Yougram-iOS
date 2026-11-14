@@ -5365,13 +5365,9 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                 guard let self, let message else {
                     return
                 }
-                var file: TelegramMediaFile?
-                for media in message.media {
-                    if let mediaFile = media as? TelegramMediaFile, mediaFile.isMusic {
-                        file = mediaFile
-                    }
-                }
-                guard let file else {
+                // The photo or file the message menu offered "Save to Files" for (any document, voice, music, video,
+                // GIF, sticker or photo); the menu applies the copy-protection and secret-media gates.
+                guard let mediaReference = messageSaveableMedia(message: message._asMessage()).file else {
                     return
                 }
                 
@@ -5383,9 +5379,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                     self.saveMediaDisposable = disposable
                 }
                 disposable.set(
-                    saveMediaToFiles(
+                    exportMediaToFiles(
                         context: self.context,
-                        fileReference: .message(message: MessageReference(message._asMessage()), media: file),
+                        userLocation: .peer(message.id.peerId),
+                        mediaReference: mediaReference,
                         present: { [weak self] c, a in
                             guard let self else {
                                 return

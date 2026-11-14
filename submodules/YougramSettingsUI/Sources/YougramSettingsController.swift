@@ -59,6 +59,11 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, st
         b.newSection()
         b.toggle(strings.Yougram_Privacy_HideAccountInNotifications, settings, \.hideAccountNameInNotifications)
         b.info(strings.Yougram_Privacy_HideAccountInNotificationsInfo)
+        b.newSection()
+        b.header(strings.Yougram_Privacy_Passcode)
+        b.toggle(strings.Yougram_Privacy_ScrambleKeypad, settings, \.scramblePasscodeKeypad)
+        b.link(strings.Yougram_Privacy_DuressCode, to: .duressCode)
+        b.info(strings.Yougram_Privacy_ScrambleKeypadInfo)
     case .appearance:
         b.header(strings.Yougram_Appearance_ChatList)
         b.toggle(strings.Yougram_Appearance_CompactChatList, settings, \.compactChatList)
@@ -98,6 +103,10 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, st
         b.toggle(strings.Yougram_Chats_DisableNextTopic, settings, \.disableAutoNextTopic)
         b.toggle(strings.Yougram_Chats_DiscussionButton, settings, \.discussionGroupButton)
         b.info(strings.Yougram_Chats_NavigationInfo)
+        b.newSection()
+        b.header(strings.Yougram_Chats_GroupsAndChannels)
+        b.toggle(strings.Yougram_Chats_KeepBannedChats, settings, \.keepChatsAfterBan)
+        b.info(strings.Yougram_Chats_KeepBannedChatsInfo)
         b.newSection()
         b.header(strings.Yougram_Chats_Media)
         b.toggle(strings.Yougram_Chats_SendHD, settings, \.sendHDPhotos)
@@ -210,6 +219,10 @@ private func yougramScreenController(context: AccountContext, screen: YougramScr
             pushControllerImpl?(yougramScreenController(context: context, screen: .contextMenu))
         case .accountsBackup:
             pushControllerImpl?(yougramAccountsBackupController(context: context))
+        case .duressCode:
+            if let controller = yougramDuressCodeController(context: context, present: { c in presentControllerImpl?(c) }) {
+                pushControllerImpl?(controller)
+            }
         case let .url(url):
             context.sharedContext.applicationBindings.openUrl(url)
         }

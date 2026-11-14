@@ -17,6 +17,7 @@ enum YougramSettingsLink: Equatable {
     case privacy
     case accountsBackup
     case contextMenu
+    case duressCode
     case url(String)
 }
 

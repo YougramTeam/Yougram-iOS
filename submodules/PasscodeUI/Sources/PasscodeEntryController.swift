@@ -131,6 +131,9 @@ public final class PasscodeEntryController: ViewController {
             if value, strongSelf.applicationBindings.isMainApp, strongSelf.isNodeLoaded {
                 strongSelf.refreshCredentialCooldown()
             }
+            if value, strongSelf.isNodeLoaded {
+                strongSelf.controllerNode.reshuffleKeypad()
+            }
         })
         self.credentialLockDisposable.set((appLockContext.isPasscodeLocked |> deliverOnMainQueue).start(next: { [weak self] locked in
             guard let self else { return }
@@ -239,6 +242,13 @@ public final class PasscodeEntryController: ViewController {
         let challenge = self.challengeData
         let scope = self.authenticationScope
         let lifetime = self.authenticationLifetime
+        // Yougram's duress code only counts on the app's own lock screen, never where the passcode
+        // authorizes something (settings, the wallet, the share extension).
+        var isAppUnlock = false
+        if case .appUnlock = scope {
+            isAppUnlock = true
+        }
+        let duressCodeHandler = isAppUnlock && self.authenticated == nil && self.completed == nil && self.applicationBindings.isMainApp ? self.appLockContext.duressCodeHandler : nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result: Result<PasscodeSession, Error> = Result {
                 switch challenge {
@@ -251,12 +261,24 @@ public final class PasscodeEntryController: ViewController {
                 let reference = passcodeCredentialReference(from: challenge)
                 return try PasscodeCredentialStore.shared.verify(code, reference: reference, scope: scope, lifetime: lifetime)
             }
+            // Checked only once the passcode itself was rejected, so the passcode always wins.
+            var isDuressCode = false
+            if duressCodeHandler != nil, case let .failure(error) = result, (error as? PasscodeError) == .invalidCode {
+                isDuressCode = PasscodeCredentialStore.shared.matchesDuressCode(code)
+            }
             DispatchQueue.main.async {
                 guard let self, self.authenticationLifecycle.acceptsResult(generation: generation) else {
                     if case let .success(session) = result { session.invalidate() }
                     return
                 }
                 self.checkingCode = false
+                if isDuressCode, let duressCodeHandler {
+                    // The handler signs out and removes the passcode, which dismisses this screen.
+                    self.controllerNode.isUserInteractionEnabled = false
+                    self.controllerNode.animateSuccess()
+                    duressCodeHandler()
+                    return
+                }
                 self.controllerNode.isUserInteractionEnabled = true
                 switch result {
                 case let .success(session):
@@ -279,6 +301,7 @@ public final class PasscodeEntryController: ViewController {
                     case .invalidCode:
                         self.controllerNode.animateError()
                         self.controllerNode.announceIncorrectPasscode()
+                        self.controllerNode.reshuffleKeypad()
                         self.refreshCredentialCooldown()
                     case let .cooldown(remaining):
                         self.controllerNode.resetInput()

@@ -17,6 +17,7 @@ import AppBundle
 import AnimationUI
 import ContextUI
 import SaveToCameraRoll
+import LegacyMediaPickerUI
 import UndoUI
 import TelegramUIPreferences
 import OpenInExternalAppUI
@@ -3366,6 +3367,97 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
         }))
     }
 
+    /// "Save to Files" from the menu: a streamed (HLS) video offers the qualities "Save to Gallery" offers (the original
+    /// only with Premium, as there), any other video is exported as is.
+    private func saveVideoToFiles(contextController c: ContextControllerProtocol?, message: Message, file: TelegramMediaFile, item: UniversalVideoGalleryItem) {
+        guard let content = item.content as? HLSVideoContent else {
+            c?.dismiss(result: .default, completion: nil)
+            self.exportVideoToFiles(fileReference: .message(message: MessageReference(message), media: file), peerId: message.id.peerId)
+            return
+        }
+        guard let videoNode = self.videoNode, let qualityState = videoNode.videoQualityState(), !qualityState.available.isEmpty else {
+            return
+        }
+        guard let qualitySet = HLSQualitySet(baseFile: content.fileReference, codecConfiguration: HLSCodecConfiguration(context: self.context)) else {
+            return
+        }
+
+        var allFiles: [FileMediaReference] = []
+        allFiles.append(content.fileReference)
+        allFiles.append(contentsOf: qualitySet.qualityFiles.values)
+
+        let qualitySignals = allFiles.map { file -> Signal<(fileId: MediaId, isCached: Bool), NoError> in
+            return self.context.engine.resources.status(resource: EngineMediaResource(file.media.resource))
+            |> take(1)
+            |> map { status -> (fileId: MediaId, isCached: Bool) in
+                return (file.media.fileId, status == .Local)
+            }
+        }
+        let peerId = message.id.peerId
+        let _ = (combineLatest(queue: .mainQueue(), qualitySignals)
+        |> deliverOnMainQueue).startStandalone(next: { [weak self, weak c] fileStatuses in
+            guard let self else {
+                return
+            }
+            let presentationData = self.presentationData
+
+            var items: [ContextMenuItem] = []
+            items.append(.action(ContextMenuActionItem(text: presentationData.strings.Common_Back, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Back"), color: theme.actionSheet.primaryTextColor)
+            }, iconPosition: .left, action: { c, _ in
+                c?.popItems()
+            })))
+
+            var qualityFiles: [(quality: Int?, file: FileMediaReference)] = []
+            if self.context.isPremium {
+                qualityFiles.append((nil, content.fileReference))
+            } else {
+                #if DEBUG
+                qualityFiles.append((nil, content.fileReference))
+                #endif
+            }
+            for quality in qualityState.available {
+                if let qualityFile = qualitySet.qualityFiles[quality] {
+                    qualityFiles.append((quality, qualityFile))
+                }
+            }
+
+            for (quality, qualityFile) in qualityFiles {
+                guard let qualityFileSize = qualityFile.media.size else {
+                    continue
+                }
+                var fileSizeString = dataSizeString(qualityFileSize, formatting: DataSizeStringFormatting(presentationData: presentationData))
+                let title: String
+                if let quality {
+                    title = presentationData.strings.Gallery_SaveToGallery_Quality("\(quality)").string
+                } else {
+                    title = presentationData.strings.Gallery_SaveToGallery_Original
+                }
+                if let statusValue = fileStatuses.first(where: { $0.fileId == qualityFile.media.fileId }), statusValue.isCached {
+                    fileSizeString.append(" • \(presentationData.strings.Gallery_SaveToGallery_cached)")
+                } else {
+                    fileSizeString.insert(contentsOf: "↓ ", at: fileSizeString.startIndex)
+                }
+                items.append(.action(ContextMenuActionItem(text: title, textLayout: .secondLineWithValue(fileSizeString), icon: { _ in
+                    return nil
+                }, action: { [weak self] c, _ in
+                    c?.dismiss(result: .default, completion: nil)
+                    self?.exportVideoToFiles(fileReference: qualityFile, peerId: peerId, fromQualityList: true)
+                })))
+            }
+
+            c?.pushItems(items: .single(ContextController.Items(content: .list(items))))
+        })
+    }
+
+    /// `fromQualityList`: picked from the quality list, which offers the original to Premium users only, as Save to
+    /// Gallery's does. Otherwise a streamed video's original is exported only once downloaded.
+    private func exportVideoToFiles(fileReference: FileMediaReference, peerId: EnginePeer.Id, fromQualityList: Bool = false) {
+        let _ = exportMediaToFiles(context: self.context, userLocation: .peer(peerId), mediaReference: fileReference.abstract, allowsStreamedVideoOriginal: fromQualityList, present: { [weak self] c, a in
+            self?.galleryController()?.present(c, in: .window(.root), with: a)
+        })
+    }
+
     private func contentInfo() -> (message: Message, file: TelegramMediaFile?, isWebpage: Bool)? {
         guard let item = self.item else {
             return nil
@@ -3942,8 +4034,17 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
                             }
                         }
                     })))
+
+                    // Under the same gate as "Save to Gallery" above.
+                    items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Conversation_SaveToFiles, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Save"), color: theme.actionSheet.primaryTextColor) }, action: { c, _ in
+                        guard let self else {
+                            c?.dismiss(result: .default, completion: nil)
+                            return
+                        }
+                        self.saveVideoToFiles(contextController: c, message: message, file: file, item: item)
+                    })))
                 }
-                
+
                 if !items.isEmpty {
                     items.append(.separator)
                 }

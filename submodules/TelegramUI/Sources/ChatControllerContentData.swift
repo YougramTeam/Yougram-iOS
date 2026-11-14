@@ -786,9 +786,11 @@ extension ChatControllerImpl {
                     }
                     
                     var shouldDismiss = false
-                    if let previous = strongSelf.state.peerView, let group = previous.peers[previous.peerId] as? TelegramGroup, group.membership != .Removed, let updatedGroup = peerView.peers[peerView.peerId] as? TelegramGroup, updatedGroup.membership == .Removed {
+                    // Yougram: a chat kept after a removal or a ban stays open on the messages stored on the device.
+                    let keepsChatsAfterRemoval = YougramCoreOptions.keepChatsAfterRemoval
+                    if !keepsChatsAfterRemoval, let previous = strongSelf.state.peerView, let group = previous.peers[previous.peerId] as? TelegramGroup, group.membership != .Removed, let updatedGroup = peerView.peers[peerView.peerId] as? TelegramGroup, updatedGroup.membership == .Removed {
                         shouldDismiss = true
-                    } else if let previous = strongSelf.state.peerView, let channel = previous.peers[previous.peerId] as? TelegramChannel, channel.participationStatus != .kicked, let updatedChannel = peerView.peers[peerView.peerId] as? TelegramChannel, updatedChannel.participationStatus == .kicked {
+                    } else if !keepsChatsAfterRemoval, let previous = strongSelf.state.peerView, let channel = previous.peers[previous.peerId] as? TelegramChannel, channel.participationStatus != .kicked, let updatedChannel = peerView.peers[peerView.peerId] as? TelegramChannel, updatedChannel.participationStatus == .kicked {
                         shouldDismiss = true
                     } else if let previous = strongSelf.state.peerView, let secretChat = previous.peers[previous.peerId] as? TelegramSecretChat, case .active = secretChat.embeddedState, let updatedSecretChat = peerView.peers[peerView.peerId] as? TelegramSecretChat, case .terminated = updatedSecretChat.embeddedState {
                         shouldDismiss = true
@@ -948,6 +950,13 @@ extension ChatControllerImpl {
                     
                     if firstTime && isNotAccessible {
                         context.account.viewTracker.forceUpdateCachedPeerData(peerId: peerView.peerId)
+                    }
+                    
+                    // Yougram: a channel or supergroup the user was banned from that is kept in the chat list shows
+                    // the messages stored on the device instead of "this channel is private" (getFullChannel keeps
+                    // failing for it). One outside the chat list has nothing stored to show and keeps the notice.
+                    if isNotAccessible, keepsChatsAfterRemoval, let channel = peerView.peers[peerView.peerId] as? TelegramChannel, case .kicked = channel.participationStatus, peerView.groupId != nil {
+                        isNotAccessible = false
                     }
                     
                     var hasBots: Bool = false

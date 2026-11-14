@@ -942,6 +942,11 @@ public protocol AppLockContext: AnyObject {
     func beginBiometricAuthentication() -> Disposable
     func failedUnlockAttempt()
     func _internalCrashForPasscodeMigrationTest(isLocked: Bool) throws -> Never
+
+    /// Yougram: what the lock screen does when the duress code is entered instead of the passcode
+    /// (Settings ▸ Yougram ▸ Privacy ▸ Duress Code). The app sets it at launch; nil turns the
+    /// duress code off.
+    var duressCodeHandler: (() -> Void)? { get set }
 }
 
 public protocol RecentSessionsController: AnyObject {

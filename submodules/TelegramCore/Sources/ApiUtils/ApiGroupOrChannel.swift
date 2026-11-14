@@ -410,12 +410,44 @@ func mergeGroupOrChannel(lhs: Peer?, rhs: Api.Chat) -> Peer? {
     }
 }
 
+/// Yougram (`YougramCoreOptions.keepChatsAfterRemoval`): `channelForbidden`, what the server sends for a channel or
+/// supergroup the user was banned from, carries only the title, the kind and the ban, and replacing the stored
+/// channel with it would drop the avatar of the chat kept in the chat list. The stored channel keeps what describes
+/// the chat itself: its photo, usernames, colors, emoji status, verification, restriction reasons, the forum and
+/// monoforum flags and copy protection. The ban comes from the stub: participation status, banned rights, access hash,
+/// creation date 0, and no admin rights, subscription or live voice chat.
+private func channelKeepingDisplayAfterBan(stored lhs: TelegramChannel, forbidden rhs: TelegramChannel) -> TelegramChannel {
+    let chatFlags: TelegramChannelFlags = [.isVerified, .isScam, .isFake, .hasGeo, .isGigagroup, .copyProtectionEnabled, .isForum, .autoTranslateEnabled, .isMonoforum, .displayForumAsTabs, .displayForumAsSidebar]
+    let info: TelegramChannelInfo
+    switch (lhs.info, rhs.info) {
+    case (.broadcast, .broadcast), (.group, .group):
+        info = lhs.info
+    default:
+        info = rhs.info
+    }
+    return TelegramChannel(id: rhs.id, accessHash: rhs.accessHash, title: rhs.title.isEmpty ? lhs.title : rhs.title, username: rhs.username ?? lhs.username, photo: rhs.photo.isEmpty ? lhs.photo : rhs.photo, creationDate: rhs.creationDate, version: rhs.version, participationStatus: rhs.participationStatus, info: info, flags: rhs.flags.union(lhs.flags.intersection(chatFlags)), restrictionInfo: rhs.restrictionInfo ?? lhs.restrictionInfo, adminRights: rhs.adminRights, bannedRights: rhs.bannedRights, defaultBannedRights: rhs.defaultBannedRights, usernames: rhs.usernames.isEmpty ? lhs.usernames : rhs.usernames, storiesHidden: rhs.storiesHidden ?? lhs.storiesHidden, nameColor: rhs.nameColor ?? lhs.nameColor, backgroundEmojiId: rhs.backgroundEmojiId ?? lhs.backgroundEmojiId, profileColor: rhs.profileColor ?? lhs.profileColor, profileBackgroundEmojiId: rhs.profileBackgroundEmojiId ?? lhs.profileBackgroundEmojiId, emojiStatus: rhs.emojiStatus ?? lhs.emojiStatus, approximateBoostLevel: rhs.approximateBoostLevel ?? lhs.approximateBoostLevel, subscriptionUntilDate: rhs.subscriptionUntilDate, verificationIconFileId: rhs.verificationIconFileId ?? lhs.verificationIconFileId, sendPaidMessageStars: rhs.sendPaidMessageStars, linkedMonoforumId: rhs.linkedMonoforumId ?? lhs.linkedMonoforumId, linkedCommunityId: rhs.linkedCommunityId ?? lhs.linkedCommunityId)
+}
+
+/// Yougram (`YougramCoreOptions.keepChatsAfterRemoval`): `chatForbidden` and `chatEmpty`, what the server sends for a
+/// basic group the user was removed from, carry no photo and no settings. A group kept in the chat list keeps its
+/// stored photo, its title when the stub has none, and copy protection; everything else comes from the stub.
+func mergeGroupKeepingDisplayAfterRemoval(lhs: TelegramGroup, rhs: TelegramGroup) -> TelegramGroup {
+    guard case .Removed = rhs.membership else {
+        return rhs
+    }
+    return TelegramGroup(id: rhs.id, title: rhs.title.isEmpty ? lhs.title : rhs.title, photo: rhs.photo.isEmpty ? lhs.photo : rhs.photo, participantCount: rhs.participantCount, role: rhs.role, membership: rhs.membership, flags: rhs.flags.union(lhs.flags.intersection(.copyProtectionEnabled)), defaultBannedRights: rhs.defaultBannedRights, migrationReference: rhs.migrationReference, creationDate: rhs.creationDate, version: rhs.version)
+}
+
 func mergeChannel(lhs: TelegramChannel?, rhs: TelegramChannel) -> TelegramChannel {
     guard let lhs = lhs else {
         return rhs
     }
 
     if case .personal? = rhs.accessHash {
+        // Yougram: a channelForbidden stub (`.kicked`, creation date 0) keeps the stored chat's look.
+        if rhs.participationStatus == .kicked && rhs.creationDate == 0 && YougramCoreOptions.keepChatsAfterRemoval {
+            return channelKeepingDisplayAfterBan(stored: lhs, forbidden: rhs)
+        }
         let storiesHidden: Bool? = rhs.storiesHidden ?? lhs.storiesHidden
         return rhs.withUpdatedStoriesHidden(storiesHidden)
     }

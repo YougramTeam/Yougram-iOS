@@ -1169,6 +1169,13 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             }
             
             presentationDataPromise.set(sharedContext.presentationData)
+            // Settings ▸ Yougram ▸ Privacy ▸ Duress Code (the lock screen checks the code itself).
+            appLockContext.duressCodeHandler = { [weak sharedContext, weak appLockContext] in
+                guard let sharedContext, let appLockContext else {
+                    return
+                }
+                yougramPerformDuressWipe(sharedContext: sharedContext, appLockContext: appLockContext)
+            }
             #if targetEnvironment(simulator)
             if CommandLine.arguments.contains("--context-menu-morph-gallery") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in

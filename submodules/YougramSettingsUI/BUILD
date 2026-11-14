@@ -21,6 +21,8 @@ swift_library(
         "//submodules/AccountContext:AccountContext",
         "//submodules/UndoUI:UndoUI",
         "//submodules/AppBundle:AppBundle",
+        "//submodules/PasscodeCore:PasscodeCore",
+        "//submodules/PasscodeUI:PasscodeUI",
     ],
     visibility = [
         "//visibility:public",

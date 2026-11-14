@@ -25,6 +25,10 @@ public final class WalletSendKeyboardComponent: Component {
     let mode: Mode
     let deleteTitle: String
     let isEnabled: Bool
+    /// The digit on each digit key, in key order (the nine keys of the top three rows, then the
+    /// bottom row's middle key). nil is the phone layout, 1 to 9 then 0. Yougram's scrambled
+    /// passcode keypad passes a shuffled order.
+    let digitOrder: [Int]?
     let action: (Action) -> Void
 
     public init(
@@ -36,6 +40,7 @@ public final class WalletSendKeyboardComponent: Component {
         mode: Mode,
         deleteTitle: String,
         isEnabled: Bool,
+        digitOrder: [Int]? = nil,
         action: @escaping (Action) -> Void
     ) {
         self.theme = theme
@@ -46,6 +51,7 @@ public final class WalletSendKeyboardComponent: Component {
         self.mode = mode
         self.deleteTitle = deleteTitle
         self.isEnabled = isEnabled
+        self.digitOrder = digitOrder.flatMap { $0.count == 10 && Set($0) == Set(0 ... 9) ? $0 : nil }
         self.action = action
     }
 
@@ -58,6 +64,7 @@ public final class WalletSendKeyboardComponent: Component {
             && lhs.mode == rhs.mode
             && lhs.deleteTitle == rhs.deleteTitle
             && lhs.isEnabled == rhs.isEnabled
+            && lhs.digitOrder == rhs.digitOrder
     }
 
     private final class KeyTrackingGestureRecognizer: UIGestureRecognizer {
@@ -475,10 +482,12 @@ public final class WalletSendKeyboardComponent: Component {
             let keyWidth: CGFloat = component.isLandscape ? 114.0 : max(0.0, (contentWidth - spacing * 2.0) / 3.0)
             let keysLeftInset = component.isLandscape ? leftInset + (contentWidth - keyWidth * 3.0 - spacing * 2.0) / 2.0 : leftInset
             let size = CGSize(width: availableSize.width, height: max(component.minimumHeight, topInset + keyHeight * 4.0 + spacing * 3.0 + bottomInset))
-            let letters = ["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ", "", "", ""]
+            let lettersByDigit = ["", "", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ"]
+            let digitOrder = component.digitOrder ?? [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
 
             for index in 0 ..< self.buttons.count {
                 let action: Action
+                var letters = ""
                 switch index {
                 case 9:
                     guard case let .decimal(separator) = component.mode else {
@@ -491,11 +500,13 @@ public final class WalletSendKeyboardComponent: Component {
                     }
                     action = .insertText(separator)
                 case 10:
-                    action = .insertText("0")
+                    action = .insertText(String(digitOrder[9]))
+                    letters = lettersByDigit[digitOrder[9]]
                 case 11:
                     action = .deleteBackward
                 default:
-                    action = .insertText(String(index + 1))
+                    action = .insertText(String(digitOrder[index]))
+                    letters = lettersByDigit[digitOrder[index]]
                 }
                 let button: KeyButton
                 if let current = self.buttons[index] {
@@ -512,7 +523,7 @@ public final class WalletSendKeyboardComponent: Component {
                 let column = CGFloat(index % 3)
                 let left = floorToScreenPixels(keysLeftInset + column * (keyWidth + spacing))
                 let right = floorToScreenPixels(keysLeftInset + column * (keyWidth + spacing) + keyWidth)
-                button.update(action: action, letters: letters[index], size: CGSize(width: right - left, height: keyHeight), component: component)
+                button.update(action: action, letters: letters, size: CGSize(width: right - left, height: keyHeight), component: component)
                 transition.setFrame(view: button, frame: CGRect(
                     x: left,
                     y: topInset + CGFloat(index / 3) * (keyHeight + spacing),

@@ -132,6 +132,8 @@ public final class AppLockContextImpl: AppLockContext {
         return self.lockStatus.isCurrentlyLocked
     }
     
+    public var duressCodeHandler: (() -> Void)?
+
     private var lastActiveTimestamp: Double?
     private var lastActiveValue: Bool = false
     private var biometricAuthenticationState = AppLockBiometricAuthenticationState()

@@ -16,6 +16,9 @@ swift_library(
         "//submodules/AccountContext:AccountContext",
         "//submodules/DeviceAccess:DeviceAccess",
         "//submodules/LegacyComponents:LegacyComponents",
+        "//submodules/TelegramPresentationData:TelegramPresentationData",
+        "//submodules/OverlayStatusController:OverlayStatusController",
+        "//submodules/PresentationDataUtils:PresentationDataUtils",
     ],
     visibility = [
         "//visibility:public",
