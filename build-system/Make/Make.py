@@ -200,6 +200,15 @@ class BazelCommandLine:
         else:
             raise Exception('Unknown configuration {}'.format(configuration))
 
+    def disable_dsym(self):
+        # dsymutil over every binary is minutes of work an installable .ipa does not need.
+        # Call after set_configuration(); only release_arm64 asks for dSYMs.
+        if self.configuration_args is not None:
+            self.configuration_args = [
+                arg for arg in self.configuration_args
+                if arg not in ('--apple_generate_dsym', '--output_groups=+dsyms')
+            ]
+
     def set_watch_app(self, api_id, api_hash, signing_identity, provisioning_profile):
         self.embed_watch_app = True
         self.watch_api_id = api_id
@@ -634,6 +643,8 @@ def build(bazel, arguments):
     )
 
     bazel_command_line.set_configuration(arguments.configuration)
+    if getattr(arguments, 'disableDsym', False):
+        bazel_command_line.disable_dsym()
     if arguments.embedWatchApp:
         if arguments.configuration in ('debug_arm64', 'release_arm64'):
             if arguments.watchApiId is None or arguments.watchApiHash is None:
@@ -1099,6 +1110,12 @@ if __name__ == '__main__':
         action='store_true',
         default=False,
         help='Respect MODULE.bazel.lock.'
+    )
+    buildParser.add_argument(
+        '--disableDsym',
+        action='store_true',
+        default=False,
+        help='Do not generate dSYMs (release_arm64 makes them by default). For CI builds that only need the .ipa.'
     )
     buildParser.add_argument(
         '--embedWatchApp',

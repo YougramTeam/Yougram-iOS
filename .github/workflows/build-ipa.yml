@@ -1,0 +1,267 @@
+name: Build IPA
+
+# Manual only: pushes never start a build. Run it from Actions > Build IPA > Run workflow,
+# or `gh workflow run build-ipa.yml -R YougramTeam/Yougram-iOS`.
+#
+# Cost notes (private repo, GitHub Free org):
+# - xcode-27 is the only standard GitHub-hosted image with Xcode 27, which this code needs.
+#   Intel images top out at Xcode 26.6, and cost the same $0.062/min anyway.
+# - The Bazel disk cache is restored and saved in four shards, so a rebuild only redoes
+#   what changed. A build that hits the step timeout still saves its progress, and the
+#   next run picks up from there instead of starting over.
+# - Cache size budget: repository variable BAZEL_CACHE_GB (default 9, inside the free
+#   10 GB). Raise the repo's Actions cache limit in Settings > Actions before raising it.
+# - The IPA is ad-hoc signed with build-system/fake-codesigning; re-sign it to install.
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: release_arm64 is the app you want to install; debug_arm64 compiles much faster but the app runs noticeably slower.
+        type: choice
+        options:
+          - release_arm64
+          - debug_arm64
+        default: release_arm64
+      use_cache:
+        description: Start from the Bazel cache of earlier runs (off = clean build, the result is still cached)
+        type: boolean
+        default: true
+      runner:
+        description: Runner label. xcode-27-xlarge (M2 Pro, 14 GB) is faster but needs a GitHub Team plan and is always billed.
+        type: string
+        default: xcode-27
+
+permissions:
+  contents: read
+  actions: write # delete superseded cache entries
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: false # never throw away a build that is hours in
+
+env:
+  CONFIGURATION: ${{ inputs.configuration }}
+  DISK_CACHE: /Users/runner/bazel-disk-cache
+  REPO_CACHE: /Users/runner/bazel-repo-cache
+  CACHE_BUDGET_GB: ${{ vars.BAZEL_CACHE_GB || '9' }}
+  CACHE_PREFIX: bazel-${{ inputs.configuration }}-
+  CACHE_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  build:
+    name: Build ${{ inputs.configuration }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355 # GitHub-hosted jobs stop at 360
+    steps:
+      - name: Prepare the runner
+        run: |
+          df -h /
+          sudo mdutil -a -i off >/dev/null 2>&1 || true
+          # Nothing here is needed for a device build. Delete it in the background
+          # while checkout and the cache restore run.
+          nohup bash -c '
+            sudo rm -rf "$HOME/Library/Android" /usr/local/share/android-sdk "$HOME/.dotnet" /usr/local/share/dotnet \
+              /Users/runner/hostedtoolcache/CodeQL "$HOME/.ghcup" 2>/dev/null
+            xcrun simctl runtime delete all 2>/dev/null
+          ' >/dev/null 2>&1 &
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          submodules: false
+          persist-credentials: false
+
+      - name: Fetch submodules (shallow, parallel)
+        run: |
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth 1 --jobs 12
+
+      - name: Select Xcode 27
+        run: |
+          XCODE="$(python3 .github/scripts/select_xcode.py)"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Make the Metal compiler available
+        # Since Xcode 26 the Metal toolchain is a separate component. Fail here, in
+        # seconds, rather than at the first shader hours into the build.
+        run: |
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            find_dmg() { ls -t /System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/*.asset/AssetData/Restore/*.dmg 2>/dev/null | head -n 1; }
+            if [ ! -d /Volumes/MetalToolchainCryptex ]; then
+              DMG="$(find_dmg)"
+              if [ -z "$DMG" ]; then
+                xcodebuild -downloadComponent MetalToolchain || true
+                DMG="$(find_dmg)"
+              fi
+              if [ -n "$DMG" ] && [ ! -d /Volumes/MetalToolchainCryptex ]; then
+                sudo hdiutil attach "$DMG" -mountpoint /Volumes/MetalToolchainCryptex -nobrowse -quiet || true
+              fi
+            fi
+            METAL_REAL=/Volumes/MetalToolchainCryptex/Metal.xctoolchain/usr/bin/metal
+            if [ -x "$METAL_REAL" ] && ! xcrun metal --version >/dev/null 2>&1; then
+              sudo ln -sf "$METAL_REAL" "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
+            fi
+          fi
+          xcrun metal --version
+
+      - name: Write build configuration
+        env:
+          API_ID: ${{ secrets.YOUGRAM_API_ID }}
+          API_HASH: ${{ secrets.YOUGRAM_API_HASH }}
+        run: |
+          python3 .github/scripts/write_build_config.py "$RUNNER_TEMP/yougram-configuration.json"
+          echo "BUILD_NUMBER=$(( $(cat build_number_offset) + GITHUB_RUN_NUMBER ))" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$(python3 -c 'import json; print(json.load(open("versions.json"))["app"])')" >> "$GITHUB_ENV"
+          # Keep external downloads (toolchains, archives) between runs as well.
+          mkdir -p "$DISK_CACHE" "$REPO_CACHE"
+          echo "common --repository_cache=$REPO_CACHE" >> "$HOME/.bazelrc"
+
+      # The cache is split in four so no single entry gets near the per-entry size limit.
+      # Each restore/save pair must list identical paths, or the entries don't match.
+      - name: Restore Bazel cache (1/4)
+        if: inputs.use_cache
+        uses: actions/cache/restore@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}1-${{ env.CACHE_SUFFIX }}
+          restore-keys: ${{ env.CACHE_PREFIX }}1-
+          path: |
+            /Users/runner/bazel-repo-cache
+            /Users/runner/bazel-disk-cache/ac
+            /Users/runner/bazel-disk-cache/cas/0*
+            /Users/runner/bazel-disk-cache/cas/1*
+            /Users/runner/bazel-disk-cache/cas/2*
+            /Users/runner/bazel-disk-cache/cas/3*
+      - name: Restore Bazel cache (2/4)
+        if: inputs.use_cache
+        uses: actions/cache/restore@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}2-${{ env.CACHE_SUFFIX }}
+          restore-keys: ${{ env.CACHE_PREFIX }}2-
+          path: |
+            /Users/runner/bazel-disk-cache/cas/4*
+            /Users/runner/bazel-disk-cache/cas/5*
+            /Users/runner/bazel-disk-cache/cas/6*
+            /Users/runner/bazel-disk-cache/cas/7*
+      - name: Restore Bazel cache (3/4)
+        if: inputs.use_cache
+        uses: actions/cache/restore@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}3-${{ env.CACHE_SUFFIX }}
+          restore-keys: ${{ env.CACHE_PREFIX }}3-
+          path: |
+            /Users/runner/bazel-disk-cache/cas/8*
+            /Users/runner/bazel-disk-cache/cas/9*
+            /Users/runner/bazel-disk-cache/cas/a*
+            /Users/runner/bazel-disk-cache/cas/b*
+      - name: Restore Bazel cache (4/4)
+        if: inputs.use_cache
+        uses: actions/cache/restore@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}4-${{ env.CACHE_SUFFIX }}
+          restore-keys: ${{ env.CACHE_PREFIX }}4-
+          path: |
+            /Users/runner/bazel-disk-cache/cas/c*
+            /Users/runner/bazel-disk-cache/cas/d*
+            /Users/runner/bazel-disk-cache/cas/e*
+            /Users/runner/bazel-disk-cache/cas/f*
+
+      - name: Build
+        id: build
+        # Below the job limit on purpose: a build that runs out of time still saves its
+        # cache in the steps after this one, so the next run resumes instead of restarting.
+        timeout-minutes: 300
+        run: |
+          df -h /
+          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
+          python3 -u build-system/Make/Make.py \
+            --overrideXcodeVersion \
+            --cacheDir="$DISK_CACHE" \
+            build \
+            --configurationPath="$RUNNER_TEMP/yougram-configuration.json" \
+            --codesigningInformationPath=build-system/fake-codesigning \
+            --configuration="$CONFIGURATION" \
+            --buildNumber="$BUILD_NUMBER" \
+            --disableDsym
+
+      - name: Collect the IPA
+        if: steps.build.outcome == 'success'
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          cp bazel-bin/Telegram/Telegram.ipa "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER.ipa"
+          ls -lh "$RUNNER_TEMP/out"
+
+      - name: Upload the IPA
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Yougram-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}-${{ inputs.configuration }}
+          path: ${{ runner.temp }}/out/*.ipa
+          retention-days: 14
+          compression-level: 0 # an .ipa is already a zip
+          if-no-files-found: error
+
+      # Cache saving runs after a failed or timed-out build too (that is the resume), but
+      # not after a manual cancel, which means "stop spending".
+      - name: Stop Bazel and trim the cache
+        id: trim
+        if: ${{ !cancelled() && steps.build.outcome != 'skipped' }}
+        run: |
+          for b in build-input/bazel-*; do [ -x "$b" ] && "$b" shutdown || true; done
+          python3 .github/scripts/trim_bazel_cache.py "$DISK_CACHE" "$REPO_CACHE" "$CACHE_BUDGET_GB"
+          df -h /
+
+      - name: Save Bazel cache (1/4)
+        id: save1
+        if: ${{ !cancelled() && steps.trim.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}1-${{ env.CACHE_SUFFIX }}
+          path: |
+            /Users/runner/bazel-repo-cache
+            /Users/runner/bazel-disk-cache/ac
+            /Users/runner/bazel-disk-cache/cas/0*
+            /Users/runner/bazel-disk-cache/cas/1*
+            /Users/runner/bazel-disk-cache/cas/2*
+            /Users/runner/bazel-disk-cache/cas/3*
+      - name: Save Bazel cache (2/4)
+        id: save2
+        if: ${{ !cancelled() && steps.trim.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}2-${{ env.CACHE_SUFFIX }}
+          path: |
+            /Users/runner/bazel-disk-cache/cas/4*
+            /Users/runner/bazel-disk-cache/cas/5*
+            /Users/runner/bazel-disk-cache/cas/6*
+            /Users/runner/bazel-disk-cache/cas/7*
+      - name: Save Bazel cache (3/4)
+        id: save3
+        if: ${{ !cancelled() && steps.trim.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}3-${{ env.CACHE_SUFFIX }}
+          path: |
+            /Users/runner/bazel-disk-cache/cas/8*
+            /Users/runner/bazel-disk-cache/cas/9*
+            /Users/runner/bazel-disk-cache/cas/a*
+            /Users/runner/bazel-disk-cache/cas/b*
+      - name: Save Bazel cache (4/4)
+        id: save4
+        if: ${{ !cancelled() && steps.trim.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ env.CACHE_PREFIX }}4-${{ env.CACHE_SUFFIX }}
+          path: |
+            /Users/runner/bazel-disk-cache/cas/c*
+            /Users/runner/bazel-disk-cache/cas/d*
+            /Users/runner/bazel-disk-cache/cas/e*
+            /Users/runner/bazel-disk-cache/cas/f*
+
+      - name: Delete superseded cache entries
+        # Keeps the repo's cache storage at one copy of the build cache, not one per run.
+        if: ${{ !cancelled() && steps.save1.outcome == 'success' && steps.save2.outcome == 'success' && steps.save3.outcome == 'success' && steps.save4.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/prune_old_caches.sh "$CACHE_PREFIX" "$CACHE_SUFFIX" 4
