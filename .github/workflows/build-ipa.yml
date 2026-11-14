@@ -1,4 +1,5 @@
 name: Build IPA
+run-name: Build IPA (${{ inputs.configuration }}, ${{ inputs.runner }}${{ !inputs.use_cache && ', clean' || '' }})
 
 # Manual only: pushes never start a build. Run it from Actions > Build IPA > Run workflow,
 # or `gh workflow run build-ipa.yml -R YougramTeam/Yougram-iOS`.
