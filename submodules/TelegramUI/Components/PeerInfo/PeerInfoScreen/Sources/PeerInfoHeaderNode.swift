@@ -1296,8 +1296,10 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             if title.replacingOccurrences(of: "\u{fe0e}", with: "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 title = "" //"\u{00A0}"
             }
+            // Yougram: "Hide Phone Number in Settings" covers the user's own profile and Settings.
+            let hideOwnPhone = YougramSettings.current.hidePhoneInSettings && peer.id == self.context.account.peerId
             if title.isEmpty {
-                if case let .user(user) = peer, let phone = user.phone {
+                if case let .user(user) = peer, let phone = user.phone, !hideOwnPhone {
                     title = formatPhoneNumber(context: self.context, number: phone)
                 } else if let addressName = peer.addressName {
                     title = "@\(addressName)"
@@ -1311,10 +1313,10 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
             
             if self.isSettings, case let .user(user) = peer {
-                var subtitle = formatPhoneNumber(context: self.context, number: user.phone ?? "")
-                
+                var subtitle = hideOwnPhone ? "" : formatPhoneNumber(context: self.context, number: user.phone ?? "")
+
                 if let mainUsername = user.addressName, !mainUsername.isEmpty {
-                    subtitle = "\(subtitle) • @\(mainUsername)"
+                    subtitle = subtitle.isEmpty ? "@\(mainUsername)" : "\(subtitle) • @\(mainUsername)"
                 }
                 subtitleStringText = subtitle
                 subtitleAttributes = MultiScaleTextState.Attributes(font: Font.regular(17.0), color: .white)

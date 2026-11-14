@@ -138,6 +138,7 @@ swift_library(
         "//submodules/SwipeToDismissGesture:SwipeToDismissGesture",
         "//submodules/DirectionalPanGesture:DirectionalPanGesture",
         "//submodules/UndoUI:UndoUI",
+        "//submodules/YougramSettingsUI",
         "//submodules/PhotoResources:PhotoResources",
         "//submodules/PassRenderer:PassRenderer",
         "//submodules/TinyThumbnail:TinyThumbnail",

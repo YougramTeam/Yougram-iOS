@@ -24,6 +24,7 @@ import ContextUI
 import NewsFeedSupport
 import NewsChannelIsland
 import ChatOverscrollIsland
+import TelegramUIPreferences
 
 private enum SubscriberAction: Equatable, Hashable {
     case join
@@ -982,6 +983,17 @@ public final class ChatChannelSubscriberInputPanelNode: ChatInputPanelNode {
         }
         
         var rightPanelItems: [GlassControlGroupComponent.Item] = []
+        // Yougram: "Discussion group button" opens a broadcast channel's linked discussion group.
+        if YougramSettings.current.discussionGroupButton, let peer = interfaceState.renderedPeer?.peer as? TelegramChannel, case let .broadcast(broadcastInfo) = peer.info, broadcastInfo.flags.contains(.hasDiscussionGroup), let peerDiscussionId = interfaceState.peerDiscussionId {
+            rightPanelItems.append(GlassControlGroupComponent.Item(
+                id: "discussionGroup",
+                content: .icon("Chat/Context Menu/MessageBubble"),
+                action: { [weak self] in
+                    self?.interfaceInteraction?.navigateToChat(peerDiscussionId)
+                },
+                accessibilityLabel: interfaceState.strings.Yougram_Chats_Discussion
+            ))
+        }
         if !canJoinInaccessibleCommunityChat(interfaceState) {
             rightPanelItems.append(GlassControlGroupComponent.Item(
                 id: "search",

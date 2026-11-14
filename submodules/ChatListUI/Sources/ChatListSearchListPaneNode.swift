@@ -2704,10 +2704,14 @@ final class ChatListSearchListPaneNode: ASDisplayNode, ChatListSearchPaneNode {
                     foundRemotePeers = .single(([], [], [], false))
                 } else {
                     foundRemotePeers = (
-                        .single((currentRemotePeersValue.0, currentRemotePeersValue.1, currentRemotePeersValue.2, true))
+                        .single((currentRemotePeersValue.0, currentRemotePeersValue.1, YougramSettings.current.hideAds ? [] : currentRemotePeersValue.2, true))
                         |> then(
                             globalPeerSearchContext.searchRemotePeers(engine: context.engine, query: query)
-                            |> mapToSignal { result in
+                            |> mapToSignal { result -> Signal<([FoundPeer], [FoundPeer], [AdPeer], Bool), NoError> in
+                                // Yougram: Hide Ads leaves the sponsored results out, and does not ask for them.
+                                if YougramSettings.current.hideAds {
+                                    return .single((result.0, result.1, [], false))
+                                }
                                 return context.engine.peers.searchAdPeers(query: query)
                                 |> map { adPeers in
                                     return (result.0, result.1, adPeers, false)

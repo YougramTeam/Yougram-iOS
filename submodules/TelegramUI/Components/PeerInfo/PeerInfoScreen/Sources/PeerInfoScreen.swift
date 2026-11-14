@@ -199,6 +199,7 @@ enum PeerInfoSettingsSection {
     case stars
     case ton
     case wallet
+    case yougram
 }
 
 enum PeerInfoReportType {
@@ -2681,14 +2682,22 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
             })
             self.expiringStoryListDisposable = (combineLatest(queue: .mainQueue(),
                 context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)),
-                expiringStoryList.state
+                expiringStoryList.state,
+                YougramSettings.updates
+                |> map { settings -> Bool in
+                    return settings.hideStories
+                }
+                |> distinctUntilChanged
             )
-            |> deliverOnMainQueue).startStrict(next: { [weak self] peer, state in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] peer, state, hideStories in
                 guard let self, let peer else {
                     return
                 }
-                self.expiringStoryListState = state
-                if state.items.isEmpty {
+                // Yougram: Settings ▸ Yougram ▸ "Hide Stories" leaves other peers' avatars without a story ring, and a
+                // tap on one opens the photo instead of the stories. Your own profile keeps them.
+                let hideStories = hideStories && peer.id != self.context.account.peerId
+                self.expiringStoryListState = hideStories ? nil : state
+                if state.items.isEmpty || hideStories {
                     self.headerNode.avatarListNode.avatarContainerNode.storyData = nil
                     self.headerNode.avatarListNode.listContainerNode.storyParams = nil
                 } else {

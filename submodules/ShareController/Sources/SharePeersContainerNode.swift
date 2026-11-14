@@ -163,8 +163,10 @@ final class SharePeersContainerNode: ASDisplayNode, ShareContentContainerNode {
         
         self.peersValue.set(.single(peers))
         
-        let canShareStory = controllerInteraction.shareStory != nil
-        
+        // Yougram: Settings ▸ Yougram ▸ "Hide Repost to Story". The share extension does not offer it either
+        // (ShareExtensionContext), where YougramSettings.current is not kept in sync.
+        let canShareStory = controllerInteraction.shareStory != nil && !YougramSettings.current.hideRepostToStory
+
         let items: Signal<[SharePeerEntry], NoError> = combineLatest(self.peersValue.get(), self.foundPeers.get(), self.tick.get(), self.themePromise.get())
         |> map { [weak controllerInteraction] initialPeers, foundPeers, _, theme -> [SharePeerEntry] in
             var entries: [SharePeerEntry] = []

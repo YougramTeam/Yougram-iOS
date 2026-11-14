@@ -13,6 +13,7 @@ import AnimationCache
 import MultiAnimationRenderer
 import TelegramStringFormatting
 import StaticGlassBackground
+import TelegramUIPreferences
 
 private func maybeAddRotationAnimation(_ layer: CALayer, duration: Double) {
     if let _ = layer.animation(forKey: "clockFrameAnimation") {
@@ -1581,5 +1582,7 @@ public class ChatMessageDateAndStatusNode: ASDisplayNode {
 }
 
 public func shouldDisplayInlineDateReactions(message: EngineMessage, isPremium: Bool, forceInline: Bool) -> Bool {
-    return false
+    // Yougram: "Hide reactions". Inline mode draws only the message effect in the status, never the reaction
+    // buttons, and every bubble kind drops its separate reactions row when this is true.
+    return YougramSettings.current.hideReactions
 }

@@ -990,7 +990,8 @@ static TGVideoEditAdjustments *TGMediaAssetsPatchedLivePhotoAdjustments(PGPhotoE
     if (selectedItems.count == 0 && currentItem != nil)
         [selectedItems addObject:currentItem];
     
-    if (intent == TGMediaAssetsControllerSendMediaIntent)
+    // Yougram: while "Send HD Photos" forces HD, the user's own sticky choice is left as it was.
+    if (intent == TGMediaAssetsControllerSendMediaIntent && ![[NSUserDefaults standardUserDefaults] boolForKey:@"yougram.sendHDPhotos"])
         [[NSUserDefaults standardUserDefaults] setObject:@(editingContext.isHighQualityPhoto) forKey:@"TG_photoHighQuality_v0"];
     
     if (saveEditedPhotos && storeAssets && editingContext != nil)
@@ -1629,7 +1630,9 @@ static TGVideoEditAdjustments *TGMediaAssetsPatchedLivePhotoAdjustments(PGPhotoE
     NSInteger i = 0;
     NSInteger num = 0;
     bool grouping = selectionContext.grouping;
-    
+    // Yougram: "HD Photos from Clipboard" (SharedAccountContextImpl mirrors the setting here).
+    bool pasteboardHighQualityPhoto = [[NSUserDefaults standardUserDefaults] boolForKey:@"yougram.hdPhotosFromClipboard"];
+
     if (editingContext != nil || grouping)
     {
         for (id<TGMediaEditableItem> asset in selectedItems)
@@ -1701,17 +1704,20 @@ static TGVideoEditAdjustments *TGMediaAssetsPatchedLivePhotoAdjustments(PGPhotoE
                     NSMutableDictionary *dict = [[NSMutableDictionary alloc] init];
                     dict[@"type"] = @"editedPhoto";
                     dict[@"image"] = image;
-                    
+
                     if (timer != nil)
                         dict[@"timer"] = timer;
-                    
+
                     if (groupedId != nil)
                         dict[@"groupedId"] = groupedId;
-                    
+
                     if (spoiler) {
                         dict[@"spoiler"] = @true;
                     }
-                    
+
+                    if (pasteboardHighQualityPhoto)
+                        dict[@"hd"] = @true;
+
                     id generatedItem = descriptionGenerator(dict, caption, nil, nil);
                     return generatedItem;
                 }];
@@ -1752,17 +1758,20 @@ static TGVideoEditAdjustments *TGMediaAssetsPatchedLivePhotoAdjustments(PGPhotoE
                     
                     if (adjustments.paintingData.stickers.count > 0)
                         dict[@"stickers"] = adjustments.paintingData.stickers;
-                    
+
                     if (timer != nil)
                         dict[@"timer"] = timer;
-                    
+
                     if (groupedId != nil)
                         dict[@"groupedId"] = groupedId;
-                    
+
                     if (spoiler) {
                         dict[@"spoiler"] = @true;
                     }
-                    
+
+                    if (pasteboardHighQualityPhoto)
+                        dict[@"hd"] = @true;
+
                     id generatedItem = descriptionGenerator(dict, caption, nil, nil);
                     return generatedItem;
                 }] catch:^SSignal *(__unused id error)

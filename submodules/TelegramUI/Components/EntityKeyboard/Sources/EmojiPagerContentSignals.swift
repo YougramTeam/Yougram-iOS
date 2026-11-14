@@ -9,6 +9,7 @@ import MultiAnimationRenderer
 import TelegramNotices
 import FlatBuffers
 import FlatSerialization
+import TelegramUIPreferences
 
 public extension EmojiPagerContentComponent {    
     private static func hasPremium(context: AccountContext, chatPeerId: EnginePeer.Id?, premiumIfSavedMessages: Bool) -> Signal<Bool, NoError> {
@@ -1264,6 +1265,12 @@ public extension EmojiPagerContentComponent {
                 }
             }
                         
+            // Yougram: "Standard emoji first" puts the unicode emoji right after the recent ones in the emoji
+            // keyboards used for typing (not reaction, status or avatar pickers). The later calls are then no-ops.
+            if YougramSettings.current.standardEmojiFirst, [.emoji, .generic].contains(subject) {
+                maybeAppendUnicodeEmoji()
+            }
+
             var itemCollectionMapping: [ItemCollectionId: StickerPackCollectionInfo] = [:]
             for (id, info, _) in view.collectionInfos {
                 if let info = info as? StickerPackCollectionInfo {

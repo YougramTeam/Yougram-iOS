@@ -248,7 +248,16 @@ private final class UniversalVideoGalleryItemOverlayNode: GalleryOverlayContentN
             return
         }
         self.message = message
-        
+
+        // Yougram: "Hide Ads" also keeps sponsored videos out of the media viewer (not even fetched).
+        if YougramSettings.current.hideAds {
+            self.adContext = nil
+            self.adDisposable.set(nil)
+            self.adState = nil
+            self.adSchedule = []
+            return
+        }
+
         let adContext = context.engine.messages.adMessages(peerId: message.id.peerId, messageId: message.id)
         self.adContext = adContext
         self.adDisposable.set((adContext.state
@@ -975,6 +984,8 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
     private let fetchDisposable = MetaDisposable()
     private var fetchStatus: MediaResourceStatus?
     private var fetchControls: FetchControls?
+
+    private let yougramAirPlayDisposable = MetaDisposable()
     
     private var scrubbingFrame = Promise<FramePreviewResult?>(nil)
     private var scrubbingFrames = false
@@ -1206,8 +1217,9 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
         self.scrubbingFrameDisposable?.dispose()
         self.hideControlsDisposable?.dispose()
         self.automaticPictureInPictureDisposable?.dispose()
+        self.yougramAirPlayDisposable.dispose()
     }
-    
+
     override func ready() -> Signal<Void, NoError> {
         return self._ready.get()
     }
@@ -1281,14 +1293,26 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
             playbackControlsIsVisible = false
         }
         
+        // Yougram: "Disable Large Video Controls" shrinks the centre controls. The side icons are a fixed 42 pt,
+        // so the side buttons stay a little larger than that.
+        let playbackControlsLayoutParams: VideoPlaybackControlsComponent.LayoutParams
+        if YougramSettings.current.disableLargeVideoControls {
+            playbackControlsLayoutParams = VideoPlaybackControlsComponent.LayoutParams(
+                sideButtonSize: 48.0,
+                centerButtonSize: 64.0,
+                spacing: 20.0
+            )
+        } else {
+            playbackControlsLayoutParams = VideoPlaybackControlsComponent.LayoutParams(
+                sideButtonSize: 64.0,
+                centerButtonSize: 92.0,
+                spacing: 30.0
+            )
+        }
         let playbackControlsSize = self.playbackControls.update(
             transition: ComponentTransition(transition),
             component: AnyComponent(VideoPlaybackControlsComponent(
-                layoutParams: VideoPlaybackControlsComponent.LayoutParams(
-                    sideButtonSize: 64.0,
-                    centerButtonSize: 92.0,
-                    spacing: 30.0
-                ),
+                layoutParams: playbackControlsLayoutParams,
                 isVisible: playbackControlsIsVisible,
                 isPlaying: playbackControlsIsPlaying,
                 displaySeekControls: playbackControlsIsSeekable,
@@ -2950,6 +2974,10 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
     }
     
     override func maybePerformActionForSwipeDismiss() -> Bool {
+        // Yougram: "Disable PiP on Swipe" makes swiping up close the video instead.
+        if YougramSettings.current.disablePipOnSwipe {
+            return false
+        }
         if let data = self.context.currentAppConfiguration.with({ $0 }).data {
             if let _ = data["ios_killswitch_disable_swipe_pip"] {
                 return false
@@ -3261,6 +3289,81 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
                 nativePictureInPictureContent.requestExpand()
             }
         }
+    }
+
+    /// Yougram: the video the AirPlay action plays; nil for content it cannot play (live streams, protected or paid
+    /// content, ads).
+    private func yougramAirPlayVideo() -> (fileReference: FileMediaReference, userLocation: MediaResourceUserLocation)? {
+        guard let item = self.item, !item.peerIsCopyProtected else {
+            return nil
+        }
+        if let (message, _, _) = self.contentInfo(), message.isCopyProtected() || message.paidContent != nil || message.adAttribute != nil {
+            return nil
+        }
+        if let content = item.content as? NativeVideoContent {
+            return (content.fileReference, content.userLocation)
+        } else if let content = item.content as? HLSVideoContent {
+            return (content.fileReference, content.userLocation)
+        }
+        return nil
+    }
+
+    /// The downloaded file for `file`, with an .mp4 extension so AVFoundation reads it: the video itself, or else
+    /// its largest downloaded quality.
+    private func yougramAirPlayCompletedPath(file: TelegramMediaFile) -> String? {
+        var candidates: [TelegramMediaFile] = [file]
+        candidates.append(contentsOf: file.alternativeRepresentations.filter({ !$0.mimeType.lowercased().contains("mpegurl") }).sorted(by: { ($0.size ?? 0) > ($1.size ?? 0) }))
+        for candidate in candidates {
+            if let path = self.context.engine.resources.completedResourcePath(id: EngineMediaResource.Id(candidate.resource.id), pathExtension: "mp4") {
+                return path
+            }
+        }
+        return nil
+    }
+
+    private func beginYougramAirPlay(startTimestamp: Double) {
+        guard let (fileReference, userLocation) = self.yougramAirPlayVideo() else {
+            return
+        }
+        let context = self.context
+
+        if let path = self.yougramAirPlayCompletedPath(file: fileReference.media) {
+            self.yougramAirPlayDisposable.set(nil)
+            self.videoNode?.pause()
+            presentYougramAirPlayPlayer(context: context, path: path, startTimestamp: startTimestamp)
+            return
+        }
+
+        // Not downloaded yet: say so, download it, and start once it is complete (if this video is still the one
+        // on screen).
+        if let controller = self.galleryController() {
+            controller.present(UndoOverlayController(presentationData: self.presentationData, content: .info(title: nil, text: self.presentationData.strings.Yougram_AirPlay_NotDownloaded, timeout: nil, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+        }
+        let fetch = freeMediaFileInteractiveFetched(account: context.account, userLocation: userLocation, fileReference: fileReference)
+        let completeData = context.engine.resources.data(id: EngineMediaResource.Id(fileReference.media.resource.id))
+        |> filter { data in
+            return data.isComplete
+        }
+        |> take(1)
+        let downloaded = Signal<Void, NoError> { subscriber in
+            let fetchDisposable = fetch.start(error: { _ in })
+            let dataDisposable = completeData.start(next: { _ in
+                subscriber.putNext(Void())
+                subscriber.putCompletion()
+            })
+            return ActionDisposable {
+                fetchDisposable.dispose()
+                dataDisposable.dispose()
+            }
+        }
+        self.yougramAirPlayDisposable.set((downloaded
+        |> deliverOnMainQueue).start(next: { [weak self] _ in
+            guard let self, self.isCentral == true, let path = self.yougramAirPlayCompletedPath(file: fileReference.media) else {
+                return
+            }
+            self.videoNode?.pause()
+            presentYougramAirPlayPlayer(context: self.context, path: path, startTimestamp: self.playerStatusValue?.timestamp ?? startTimestamp)
+        }))
     }
 
     private func contentInfo() -> (message: Message, file: TelegramMediaFile?, isWebpage: Bool)? {
@@ -3941,10 +4044,20 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
                 if strongSelf.canDelete() {
                     items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Common_Delete, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { _, f in
                         f(.default)
-                        
+
                         if let strongSelf = self {
                             strongSelf.footerContentNode.deleteButtonPressed()
                         }
+                    })))
+                }
+
+                // Yougram: Settings ▸ Yougram ▸ "AirPlay Button".
+                if YougramSettings.current.airPlayButton, strongSelf.yougramAirPlayVideo() != nil {
+                    let startTimestamp = status.timestamp
+                    items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Yougram_AirPlay, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Media Gallery/AirPlay"), color: theme.contextMenu.primaryColor) }, action: { _, f in
+                        f(.default)
+
+                        self?.beginYougramAirPlay(startTimestamp: startTimestamp)
                     })))
                 }
             }

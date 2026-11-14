@@ -155,6 +155,8 @@ final class AuthorizedApplicationContext {
     private var showCallsTabDisposable: Disposable?
     private var showNewsTab: Bool
     private var showNewsTabDisposable: Disposable?
+    private var showContactsTab: Bool
+    private var showContactsTabDisposable: Disposable?
     private var enablePostboxTransactionsDiposable: Disposable?
     
     init(sharedApplicationContext: SharedApplicationContext, mainWindow: Window1, context: AccountContextImpl, accountManager: AccountManager<TelegramAccountManagerTypes>, showCallsTab: Bool, reinitializedNotificationSettings: @escaping () -> Void) {
@@ -170,7 +172,8 @@ final class AuthorizedApplicationContext {
 
         self.showCallsTab = showCallsTab
         self.showNewsTab = isNewsFeedEnabled(appConfiguration: context.currentAppConfiguration.with { $0 })
-        
+        self.showContactsTab = YougramSettings.current.showContactsTab
+
         self.notificationController = NotificationContainerController(context: context)
         
         self.rootController = TelegramRootController(context: context)
@@ -252,7 +255,7 @@ final class AuthorizedApplicationContext {
         }
         
         if self.rootController.rootTabController == nil {
-            self.rootController.addRootControllers(showCallsTab: self.showCallsTab, showNewsTab: self.showNewsTab)
+            self.rootController.addRootControllers(showCallsTab: self.showCallsTab, showContactsTab: self.showContactsTab, showNewsTab: self.showNewsTab)
         }
         if let tabsController = self.rootController.viewControllers.first as? TabBarController, !tabsController.controllers.isEmpty, tabsController.selectedIndex >= 0 {
             let controller = tabsController.controllers[tabsController.selectedIndex]
@@ -817,7 +820,7 @@ final class AuthorizedApplicationContext {
             if let strongSelf = self {
                 if strongSelf.showCallsTab != value {
                     strongSelf.showCallsTab = value
-                    strongSelf.rootController.updateRootControllers(showCallsTab: value, showNewsTab: strongSelf.showNewsTab)
+                    strongSelf.rootController.updateRootControllers(showCallsTab: value, showContactsTab: strongSelf.showContactsTab, showNewsTab: strongSelf.showNewsTab)
                 }
             }
         })
@@ -832,7 +835,21 @@ final class AuthorizedApplicationContext {
                 return
             }
             self.showNewsTab = value
-            self.rootController.updateRootControllers(showCallsTab: self.showCallsTab, showNewsTab: value)
+            self.rootController.updateRootControllers(showCallsTab: self.showCallsTab, showContactsTab: self.showContactsTab, showNewsTab: value)
+        })
+
+        // Settings ▸ Yougram ▸ Contacts Tab.
+        self.showContactsTabDisposable = (YougramSettings.updates
+        |> map { settings -> Bool in
+            return settings.showContactsTab
+        }
+        |> distinctUntilChanged
+        |> deliverOnMainQueue).start(next: { [weak self] value in
+            guard let self, self.showContactsTab != value else {
+                return
+            }
+            self.showContactsTab = value
+            self.rootController.updateRootControllers(showCallsTab: self.showCallsTab, showContactsTab: value, showNewsTab: self.showNewsTab)
         })
         
         self.rootController.setForceInCallStatusBar((self.context.sharedContext as! SharedAccountContextImpl).currentCallStatusBarNode)
@@ -847,6 +864,7 @@ final class AuthorizedApplicationContext {
     deinit {
         self.context.account.postbox.clearCaches()
         self.showNewsTabDisposable?.dispose()
+        self.showContactsTabDisposable?.dispose()
         self.context.account.shouldKeepOnlinePresence.set(.single(false))
         self.context.account.shouldBeServiceTaskMaster.set(.single(.never))
         self.loggedOutDisposable.dispose()

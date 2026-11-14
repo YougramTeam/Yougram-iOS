@@ -420,24 +420,30 @@ public class ShareRootControllerImpl {
                 }
             }
 
+            // Yougram settings, read once from the shared data before the share sheet is shown (YougramSettings.current
+            // is not kept in sync in this extension).
+            let yougramSettings = Atomic<YougramSettings>(value: YougramSettings.defaultSettings)
+
             let applicationInterface: Signal<(ShareControllerEnvironment, ShareControllerAccountContext, PostboxAccessChallengeData, [ShareControllerSwitchableAccount]), ShareAuthorizationError> = accountData
             |> castError(ShareAuthorizationError.self)
             |> mapToSignal { data -> Signal<(ShareControllerEnvironment, ShareControllerAccountContext, PostboxAccessChallengeData, [ShareControllerSwitchableAccount]), ShareAuthorizationError> in
                 let (environment, context, otherAccounts) = data
-                
+
                 let limitsConfigurationAndContentSettings = TelegramEngine.EngineData(accountPeerId: context.stateManager.accountPeerId, postbox: context.stateManager.postbox).get(
                     TelegramEngine.EngineData.Item.Configuration.Limits(),
                     TelegramEngine.EngineData.Item.Configuration.ContentSettings(),
                     TelegramEngine.EngineData.Item.Configuration.App()
                 )
-                
-                return combineLatest(accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.presentationPasscodeSettings]), limitsConfigurationAndContentSettings, accountManager.accessChallengeData())
+
+                return combineLatest(accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.presentationPasscodeSettings, ApplicationSpecificSharedDataKeys.yougramSettings]), limitsConfigurationAndContentSettings, accountManager.accessChallengeData())
                 |> take(1)
                 |> deliverOnMainQueue
                 |> castError(ShareAuthorizationError.self)
                 |> map { sharedData, limitsConfigurationAndContentSettings, data -> (ShareControllerEnvironment, ShareControllerAccountContext, PostboxAccessChallengeData, [ShareControllerSwitchableAccount]) in
                     updateLegacyLocalization(strings: environment.presentationData.strings)
-                    
+
+                    let _ = yougramSettings.swap(sharedData.entries[ApplicationSpecificSharedDataKeys.yougramSettings]?.get(YougramSettings.self) ?? YougramSettings.defaultSettings)
+
                     return (environment, context, data.data, otherAccounts)
                 }
             }
@@ -554,8 +560,13 @@ public class ShareRootControllerImpl {
                             }
                         }
                         
+                        // Yougram: Settings ▸ Yougram ▸ "Hide Repost to Story".
+                        let hideRepostToStory = yougramSettings.with { $0.hideRepostToStory }
+
                         if canShareToStory {
                             shareController.canSendInHighQuality = canSendInHighQuality
+                        }
+                        if canShareToStory && !hideRepostToStory {
                             shareController.shareStory = { [weak self] in
                                 guard let self else {
                                     return

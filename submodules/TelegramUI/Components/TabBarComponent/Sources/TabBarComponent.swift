@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import Display
 import TelegramPresentationData
+import TelegramUIPreferences
 import ComponentFlow
 import ComponentDisplayAdapters
 import GlassBackgroundComponent
@@ -487,6 +488,10 @@ public final class TabBarComponent: Component {
     /// A horizontal regular bar takes iOS 27's portrait tab bar layout (`tabBarSystemItemsLayout`); without it, its
     /// items share the available width (`tabBarItemsLayout`), as where iOS would switch to its wide bar.
     public let usesSystemLayout: Bool
+    /// Settings ▸ Yougram ▸ Tab Labels off: the app's tab bar (items are `UITabBarItem`s) shows its horizontal regular
+    /// items as icons only, the bar as thin as the compact one. Read when the component is made, so a change makes the
+    /// next one unequal and lays the bar out again; other tab bars (custom items) keep their titles.
+    let hidesItemTitles: Bool
 
     public init(
         theme: PresentationTheme,
@@ -512,6 +517,13 @@ public final class TabBarComponent: Component {
         self.axis = axis
         self.isCompact = isCompact
         self.usesSystemLayout = usesSystemLayout
+        self.hidesItemTitles = !YougramSettings.current.showTabLabels && items.contains(where: { item in
+            if case .tabBarItem = item.content {
+                return true
+            } else {
+                return false
+            }
+        })
     }
     
     public static func ==(lhs: TabBarComponent, rhs: TabBarComponent) -> Bool {
@@ -546,6 +558,9 @@ public final class TabBarComponent: Component {
             return false
         }
         if lhs.usesSystemLayout != rhs.usesSystemLayout {
+            return false
+        }
+        if lhs.hidesItemTitles != rhs.hidesItemTitles {
             return false
         }
         return true
@@ -875,7 +890,7 @@ public final class TabBarComponent: Component {
             // A new axis or mode is applied without animation, so the capsule does not morph through
             // intermediate shapes.
             var transition = transition
-            if let previousComponent, previousComponent.axis != component.axis || previousComponent.isCompact != component.isCompact || previousComponent.usesSystemLayout != component.usesSystemLayout {
+            if let previousComponent, previousComponent.axis != component.axis || previousComponent.isCompact != component.isCompact || previousComponent.usesSystemLayout != component.usesSystemLayout || previousComponent.hidesItemTitles != component.hidesItemTitles {
                 transition = .immediate
             }
             // Search is laid out on the horizontal axis only.
@@ -888,9 +903,16 @@ public final class TabBarComponent: Component {
             
             self.overrideUserInterfaceStyle = component.theme.overallDarkAppearance ? .dark : .light
 
+            // Without titles (`hidesItemTitles`) a horizontal regular bar keeps its items' lengths and takes the compact
+            // bar's thickness.
+            let hidesTitles = component.hidesItemTitles && component.axis == .horizontal && !component.isCompact
+            let showsTitle = !component.isCompact && !hidesTitles
+
             // The search button is as tall as the bar.
             let barHeight: CGFloat
-            if isSystemLayout {
+            if hidesTitles {
+                barHeight = tabBarCompactBarThickness
+            } else if isSystemLayout {
                 barHeight = tabBarSystemBarThickness
             } else if component.isCompact {
                 barHeight = tabBarCompactBarThickness
@@ -935,11 +957,18 @@ public final class TabBarComponent: Component {
             if search != nil {
                 availableLength -= barHeight + 8.0
             }
-            let itemsLayout: TabBarItemsLayout
+            var itemsLayout: TabBarItemsLayout
             if isSystemLayout {
                 itemsLayout = tabBarSystemItemsLayout(fittedItemWidths: titleWidths, availableLength: availableLength, hasAccessory: search != nil)
             } else {
                 itemsLayout = tabBarItemsLayout(axis: component.axis, isCompact: component.isCompact, unboundItemWidths: titleWidths.map { $0 + 10.0 * 2.0 }, availableLength: availableLength)
+            }
+            if hidesTitles {
+                itemsLayout.size.height = barHeight
+                for index in itemsLayout.itemFrames.indices {
+                    itemsLayout.itemFrames[index].origin.y = tabBarInnerInset
+                    itemsLayout.itemFrames[index].size.height = barHeight - tabBarInnerInset * 2.0
+                }
             }
             let tabsSize = itemsLayout.size
 
@@ -982,7 +1011,7 @@ public final class TabBarComponent: Component {
                         item: item,
                         theme: component.theme,
                         isSearchActive: search?.isActive == true,
-                        showsTitle: !component.isCompact,
+                        showsTitle: showsTitle,
                         isSelected: false,
                         tintSelectedItem: component.tintSelectedItem,
                         isSystemLayout: isSystemLayout,
@@ -997,7 +1026,7 @@ public final class TabBarComponent: Component {
                         item: item,
                         theme: component.theme,
                         isSearchActive: search?.isActive == true,
-                        showsTitle: !component.isCompact,
+                        showsTitle: showsTitle,
                         isSelected: true,
                         tintSelectedItem: component.tintSelectedItem,
                         isSystemLayout: isSystemLayout,

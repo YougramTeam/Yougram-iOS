@@ -894,6 +894,7 @@ private final class NotificationServiceHandler {
                 ApplicationSpecificSharedDataKeys.inAppNotificationSettings,
                 ApplicationSpecificSharedDataKeys.voiceCallSettings,
                 ApplicationSpecificSharedDataKeys.automaticMediaDownloadSettings,
+                ApplicationSpecificSharedDataKeys.yougramSettings,
                 SharedDataKeys.loggingSettings
             ])
         )
@@ -927,7 +928,10 @@ private final class NotificationServiceHandler {
             }
 
             let inAppNotificationSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.inAppNotificationSettings]?.get(InAppNotificationSettings.self) ?? InAppNotificationSettings.defaultSettings
-            
+            // Yougram's settings live in the same store; YougramSettings.current is not kept
+            // in sync in this process, so read the entry.
+            let hideRecipientAccountName = (sharedData.entries[ApplicationSpecificSharedDataKeys.yougramSettings]?.get(YougramSettings.self) ?? YougramSettings.defaultSettings).hideAccountNameInNotifications
+
             let voiceCallSettings: VoiceCallSettings
             if let value = sharedData.entries[ApplicationSpecificSharedDataKeys.voiceCallSettings]?.get(VoiceCallSettings.self) {
                 voiceCallSettings = value
@@ -977,7 +981,7 @@ private final class NotificationServiceHandler {
                 // extension runs out of time, already names the account. Only when it is named:
                 // every transaction here takes the database write lock the app may hold.
                 let recipientAccountName: Signal<String?, NoError>
-                if notificationsNameRecipientAccount(records: records.records, notificationsFromAllAccounts: inAppNotificationSettings.displayNotificationsFromAllAccounts, isCurrentAccount: isCurrentAccount) {
+                if !hideRecipientAccountName && notificationsNameRecipientAccount(records: records.records, notificationsFromAllAccounts: inAppNotificationSettings.displayNotificationsFromAllAccounts, isCurrentAccount: isCurrentAccount) {
                     recipientAccountName = stateManager.postbox.transaction { transaction -> String? in
                         return notificationRecipientAccountName(accountPeer: transaction.getPeer(accountPeerId).flatMap(EnginePeer.init))
                     }

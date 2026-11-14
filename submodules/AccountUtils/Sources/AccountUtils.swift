@@ -4,8 +4,9 @@ import TelegramCore
 import TelegramUIPreferences
 import AccountContext
 
-public let maximumNumberOfAccounts = 3
-public let maximumPremiumNumberOfAccounts = 4
+// Yougram: no account limit (Telegram allows 3, or 4 with Premium).
+public let maximumNumberOfAccounts = 100_000
+public let maximumPremiumNumberOfAccounts = 100_000
 
 public func activeAccountsAndPeers(context: AccountContext, includePrimary: Bool = false) -> Signal<((AccountContext, EnginePeer)?, [(AccountContext, EnginePeer, Int32)]), NoError> {
     let sharedContext = context.sharedContext

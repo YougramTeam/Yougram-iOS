@@ -17,6 +17,26 @@ import PeerInfoPaneNode
 import WebUI
 import WalletContext
 
+/// Yougram: Settings ▸ Yougram ▸ "Hide Stories" leaves other peers' profiles without a Stories tab (your own
+/// profile keeps its stories and archive). nil, "not known yet", stays nil.
+private func yougramMaskingHiddenStories(_ hasStories: Signal<Bool?, NoError>) -> Signal<Bool?, NoError> {
+    return combineLatest(
+        hasStories,
+        YougramSettings.updates
+        |> map { settings -> Bool in
+            return settings.hideStories
+        }
+        |> distinctUntilChanged
+    )
+    |> map { hasStories, hideStories -> Bool? in
+        guard let hasStories else {
+            return nil
+        }
+        return hasStories && !hideStories
+    }
+    |> distinctUntilChanged
+}
+
 enum PeerInfoUpdatingAvatar {
     case none
     case image(TelegramMediaImageRepresentation)
@@ -888,7 +908,9 @@ func peerInfoScreenSettingsData(context: AccountContext, peerId: EnginePeer.Id, 
     let preferences = context.sharedContext.accountManager.sharedData(keys: [
         SharedDataKeys.proxySettings,
         ApplicationSpecificSharedDataKeys.inAppNotificationSettings,
-        ApplicationSpecificSharedDataKeys.experimentalUISettings
+        ApplicationSpecificSharedDataKeys.experimentalUISettings,
+        // Yougram: re-render Settings when a Yougram setting it shows changes (e.g. the hidden phone).
+        ApplicationSpecificSharedDataKeys.yougramSettings
     ])
     
     let notificationsAuthorizationStatus = Promise<AccessType>(.allowed)
@@ -1366,15 +1388,15 @@ func peerInfoScreenData(
             }
             
             let storyListContext = PeerStoryListContext(account: context.account, peerId: peerId, isArchived: false, folderId: nil)
-            let hasStories: Signal<Bool?, NoError> = storyListContext.state
+            let hasStories: Signal<Bool?, NoError> = yougramMaskingHiddenStories(storyListContext.state
             |> map { state -> Bool? in
                 if !state.hasCache {
                     return nil
                 }
                 return !state.items.isEmpty
             }
-            |> distinctUntilChanged
-            
+            |> distinctUntilChanged)
+
             let hasStoryArchive: Signal<Bool?, NoError>
             var storyArchiveListContext: StoryListContext?
             if isMyProfile {
@@ -1851,15 +1873,15 @@ func peerInfoScreenData(
             let requestsStatePromise = Promise<PeerInvitationImportersState?>(nil)
             
             let storyListContext = PeerStoryListContext(account: context.account, peerId: peerId, isArchived: false, folderId: nil)
-            let hasStories: Signal<Bool?, NoError> = storyListContext.state
+            let hasStories: Signal<Bool?, NoError> = yougramMaskingHiddenStories(storyListContext.state
             |> map { state -> Bool? in
                 if !state.hasCache {
                     return nil
                 }
                 return !state.items.isEmpty
             }
-            |> distinctUntilChanged
-            
+            |> distinctUntilChanged)
+
             let accountIsPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
             |> map { peer -> Bool in
                 return peer?.isPremium ?? false
@@ -2240,14 +2262,14 @@ func peerInfoScreenData(
             let hasStories: Signal<Bool?, NoError>
             if peerId.namespace == Namespaces.Peer.CloudChannel {
                 storyListContext = PeerStoryListContext(account: context.account, peerId: peerId, isArchived: false, folderId: nil)
-                hasStories = storyListContext!.state
+                hasStories = yougramMaskingHiddenStories(storyListContext!.state
                 |> map { state -> Bool? in
                     if !state.hasCache {
                         return nil
                     }
                     return !state.items.isEmpty
                 }
-                |> distinctUntilChanged
+                |> distinctUntilChanged)
             } else {
                 storyListContext = nil
                 hasStories = .single(false)

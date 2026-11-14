@@ -4,6 +4,7 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import Display
 import TelegramPresentationData
+import TelegramUIPreferences
 
 public final class TabBarItemInfo: NSObject {
     public let previewing: Bool
@@ -99,16 +100,23 @@ open class TabBarControllerImpl: ViewController, TabBarController {
     }
     
     private let pendingControllerDisposable = MetaDisposable()
-    
+
     private var theme: PresentationTheme
     private var strings: PresentationStrings
-    
+
+    /// Settings ▸ Yougram ▸ Tab Labels, as the bar was last laid out with.
+    private var showsTabLabels: Bool
+    private var tabLabelsDisposable: Disposable?
+    /// The bottom inset the bar gave the current tab in the last pass, and the container size it was for.
+    private var lastBottomInset: (size: CGSize, inset: CGFloat)?
+
     public init(theme: PresentationTheme, strings: PresentationStrings) {
         self.theme = theme
         self.strings = strings
-        
+        self.showsTabLabels = YougramSettings.current.showTabLabels
+
         super.init(navigationBarPresentationData: nil)
-        
+
         self.scrollToTop = { [weak self] in
             guard let strongSelf = self else {
                 return
@@ -117,14 +125,62 @@ open class TabBarControllerImpl: ViewController, TabBarController {
                 controller.scrollToTop?()
             }
         }
+
+        self.tabLabelsDisposable = (YougramSettings.updates
+        |> map { settings -> Bool in
+            return settings.showTabLabels
+        }
+        |> distinctUntilChanged
+        |> deliverOnMainQueue).start(next: { [weak self] value in
+            guard let self, self.showsTabLabels != value else {
+                return
+            }
+            self.showsTabLabels = value
+            self.tabLabelsUpdated()
+        })
     }
 
     required public init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     deinit {
         self.pendingControllerDisposable.dispose()
+        self.tabLabelsDisposable?.dispose()
+    }
+
+    /// The bar (`TabBarComponent` reads the setting) is thinner or thicker now, and the current tab's bottom inset with
+    /// it. The bar node reuses its last pass while its parameters are unchanged, which the setting is not one of: one
+    /// pass with the hidden state flipped makes the next a fresh one. Both are immediate and run before anything is
+    /// drawn.
+    private func tabLabelsUpdated() {
+        guard self.isNodeLoaded, let layout = self.validLayout else {
+            return
+        }
+        let isHidden = self.tabBarControllerNode.tabBarHidden
+        self.tabBarControllerNode.tabBarHidden = !isHidden
+        let _ = self.tabBarControllerNode.containerLayoutUpdated(layout, toolbar: self.currentController?.toolbar, transition: .immediate)
+        self.tabBarControllerNode.tabBarHidden = isHidden
+        self.containerLayoutUpdated(layout, transition: .immediate)
+    }
+
+    /// The bottom inset a tab is laid out with before it is shown, when the bar is along the bottom. With the tab labels
+    /// hidden the bar is thinner than this estimate assumes: the inset of the last pass is used when it is for the same
+    /// container size.
+    private func estimatedTabBarBottomInset(layout: ContainerViewLayout) -> CGFloat {
+        if !self.showsTabLabels, let lastBottomInset = self.lastBottomInset, lastBottomInset.size == layout.size {
+            return lastBottomInset.inset
+        }
+        var options: ContainerViewLayoutInsetOptions = []
+        if layout.metrics.widthClass == .regular {
+            options.insert(.input)
+        }
+        let bottomInset: CGFloat = layout.insets(options: options).bottom
+        if !layout.safeInsets.left.isZero {
+            return 34.0 + bottomInset
+        } else {
+            return 49.0 + bottomInset
+        }
     }
     
     public func updateTheme(theme: PresentationTheme) {
@@ -194,18 +250,7 @@ open class TabBarControllerImpl: ViewController, TabBarController {
                     var updatedLayout = validLayout
                     
                     if strongSelf.tabBarControllerNode.sidePlacement(for: validLayout) == nil {
-                        var tabBarHeight: CGFloat
-                        var options: ContainerViewLayoutInsetOptions = []
-                        if validLayout.metrics.widthClass == .regular {
-                            options.insert(.input)
-                        }
-                        let bottomInset: CGFloat = validLayout.insets(options: options).bottom
-                        if !validLayout.safeInsets.left.isZero {
-                            tabBarHeight = 34.0 + bottomInset
-                        } else {
-                            tabBarHeight = 49.0 + bottomInset
-                        }
-                        updatedLayout.intrinsicInsets.bottom = tabBarHeight
+                        updatedLayout.intrinsicInsets.bottom = strongSelf.estimatedTabBarBottomInset(layout: validLayout)
                     }
                     
                     strongSelf.controllers[index].containerLayoutUpdated(updatedLayout, transition: .immediate)
@@ -389,7 +434,10 @@ open class TabBarControllerImpl: ViewController, TabBarController {
         self.validLayout = layout
         
         let bottomInset = self.tabBarControllerNode.containerLayoutUpdated(layout, toolbar: self.currentController?.toolbar, transition: transition)
-        
+        if let bottomInset, !self.tabBarControllerNode.tabBarHidden {
+            self.lastBottomInset = (layout.size, bottomInset)
+        }
+
         if let currentController = self.currentController {
             currentController.view.frame = CGRect(origin: CGPoint(), size: layout.size)
             
@@ -411,20 +459,9 @@ open class TabBarControllerImpl: ViewController, TabBarController {
             currentController.view.frame = CGRect(origin: CGPoint(), size: layout.size)
             
             var updatedLayout = layout
-            
-            var tabBarHeight: CGFloat
-            var options: ContainerViewLayoutInsetOptions = []
-            if updatedLayout.metrics.widthClass == .regular {
-                options.insert(.input)
-            }
-            let bottomInset: CGFloat = updatedLayout.insets(options: options).bottom
-            if !updatedLayout.safeInsets.left.isZero {
-                tabBarHeight = 34.0 + bottomInset
-            } else {
-                tabBarHeight = 49.0 + bottomInset
-            }
+
             if !self.tabBarControllerNode.tabBarHidden && self.tabBarControllerNode.sidePlacement(for: layout) == nil {
-                updatedLayout.intrinsicInsets.bottom = tabBarHeight
+                updatedLayout.intrinsicInsets.bottom = self.estimatedTabBarBottomInset(layout: updatedLayout)
             }
             
             currentController.containerLayoutUpdated(updatedLayout, transition: .immediate)

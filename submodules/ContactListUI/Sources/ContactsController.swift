@@ -80,19 +80,29 @@ public class ContactsController: ViewController {
     private var hasAppeared = false
     private var appearActions: [(ContactsController) -> Void] = []
     
+    /// A root tab of the tab bar (Yougram's Contacts tab) rather than a screen pushed over Settings: the header has no
+    /// back button, and the screen has a tab bar item.
+    public let isTabMode: Bool
+
     /// The Contacts screen, pushed over Settings (Settings ▸ Contacts, `tg://contacts`): the header has a back button,
-    /// Sort and Add.
-    public init(context: AccountContext) {
+    /// Sort and Add. With `isTabMode` it is the Contacts tab instead.
+    public init(context: AccountContext, isTabMode: Bool = false) {
         self.context = context
-        
+        self.isTabMode = isTabMode
+
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
-        
+
         super.init(navigationBarPresentationData: nil)
-        
+
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
-        
+
         self.title = self.presentationData.strings.Contacts_Title
-        
+
+        if isTabMode {
+            self.tabBarItemContextActionType = .always
+            self.updateTabBarItem()
+        }
+
         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
         
         self.scrollToTop = { [weak self] in
@@ -106,11 +116,14 @@ public class ContactsController: ViewController {
             if let strongSelf = self {
                 let previousTheme = strongSelf.presentationData.theme
                 let previousStrings = strongSelf.presentationData.strings
-                
+                let previousReduceMotion = strongSelf.presentationData.reduceMotion
+
                 strongSelf.presentationData = presentationData
-                
+
                 if previousTheme !== presentationData.theme || previousStrings !== presentationData.strings {
                     strongSelf.updateThemeAndStrings()
+                } else if previousReduceMotion != presentationData.reduceMotion {
+                    strongSelf.updateTabBarItem()
                 }
             }
         }).strict()
@@ -137,9 +150,21 @@ public class ContactsController: ViewController {
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
         
         self.title = self.presentationData.strings.Contacts_Title
+        self.updateTabBarItem()
         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
     }
-    
+
+    private func updateTabBarItem() {
+        guard self.isTabMode else {
+            return
+        }
+        self.tabBarItem.title = self.presentationData.strings.Contacts_TabTitle
+        let icon = UIImage(bundleImageName: "Chat List/Tabs/IconContacts")
+        self.tabBarItem.image = icon
+        self.tabBarItem.selectedImage = icon
+        self.tabBarItem.animationName = self.presentationData.reduceMotion ? nil : "TabContacts"
+    }
+
     override public func loadDisplayNode() {
         let sortOrderSignal: Signal<ContactsSortOrder, NoError> = combineLatest(self.sortOrderPromise.get(), self.isInVoiceOver.get())
         |> map { sortOrder, isInVoiceOver in
@@ -636,12 +661,50 @@ public class ContactsController: ViewController {
         })
     }
     
+    /// The Contacts tab's long-press menu: Add Contact.
+    override public func tabBarItemContextAction(sourceView: ContextExtractedContentContainingView, gesture: ContextGesture) {
+        guard self.isTabMode else {
+            return
+        }
+        let items: [ContextMenuItem] = [
+            .action(ContextMenuActionItem(text: self.presentationData.strings.Contacts_AddContact, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/AddUser"), color: theme.contextMenu.primaryColor)
+            }, action: { [weak self] c, _ in
+                c?.dismiss(completion: {
+                    self?.addPressed()
+                })
+            }))
+        ]
+        let contextController = makeContextController(presentationData: self.presentationData, source: .reference(ContactsTabBarContextReferenceContentSource(sourceView: sourceView)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+        self.context.sharedContext.mainWindow?.presentInGlobalOverlay(contextController)
+    }
+
     override public func tabBarActivateSearch() {
         self.activateSearch()
     }
 
     override public func tabBarDeactivateSearch() {
         self.deactivateSearch(animated: true)
+    }
+}
+
+/// The Contacts tab's item in the tab bar: the menu opens above it, as the Chats tab's does.
+private final class ContactsTabBarContextReferenceContentSource: ContextReferenceContentSource {
+    let keepInPlace: Bool = true
+    let actionsHorizontalAlignment: ContextActionsHorizontalAlignment = .center
+
+    private let sourceView: ContextExtractedContentContainingView
+
+    init(sourceView: ContextExtractedContentContainingView) {
+        self.sourceView = sourceView
+    }
+
+    func transitionInfo() -> ContextControllerReferenceViewInfo? {
+        return ContextControllerReferenceViewInfo(
+            referenceView: self.sourceView.contentView,
+            contentAreaInScreenSpace: mainWindowScreenBounds,
+            actionsPosition: .top
+        )
     }
 }
 

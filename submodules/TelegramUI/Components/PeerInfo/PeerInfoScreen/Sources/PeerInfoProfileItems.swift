@@ -16,6 +16,7 @@ import WebUI
 import AvatarNode
 import PeerNameColorItem
 import BoostLevelIconComponent
+import TelegramUIPreferences
 
 private let enabledPublicBioEntities: EnabledEntityTypes = [.allUrl, .mention, .hashtag]
 private let enabledPrivateBioEntities: EnabledEntityTypes = [.internalUrl, .mention, .hashtag]
@@ -177,7 +178,7 @@ func infoItems(
             ))
         }
         
-        if let phone = user.phone {
+        if let phone = user.phone, !(isMyProfile && YougramSettings.current.hidePhoneInSettings) {
             let formattedPhone = formatPhoneNumber(context: context, number: phone)
             let label: String
             if formattedPhone.hasPrefix("+888 ") {

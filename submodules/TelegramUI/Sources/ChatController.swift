@@ -8112,7 +8112,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                             }
                         })
                     }
-                } else if self.presentationInterfaceState.interfaceState.mediaRecordingMode == .audio {
+                } else if self.presentationInterfaceState.interfaceState.mediaRecordingMode == .audio, !YougramSettings.current.disableRecordingHints {
                     var canSendMedia = false
                     if let channel = self.presentationInterfaceState.renderedPeer?.peer as? TelegramChannel {
                         if channel.hasBannedPermission(.banSendMedia) == nil && channel.hasBannedPermission(.banSendVoice) == nil {
@@ -8738,7 +8738,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         if let button = self.rightNavigationButton {
             if case .standard(.previewing) = self.mode {
                 self.navigationButtonAction(button.action)
-            } else if case let .peer(peerId) = self.chatLocation, case .openChatInfo(expandAvatar: true, _) = button.action, let storyStats = self.contentData?.state.storyStats, storyStats.unseenCount != 0, let avatarNode = self.avatarNode {
+            } else if case let .peer(peerId) = self.chatLocation, case .openChatInfo(expandAvatar: true, _) = button.action, let storyStats = self.contentData?.state.storyStats, storyStats.unseenCount != 0, !YougramSettings.current.hideStories, let avatarNode = self.avatarNode {
                 self.openStories(peerId: peerId, avatarHeaderNode: nil, avatarNode: avatarNode.avatarNode)
             } else {
                 if case .openChatInfo = button.action {
@@ -10385,7 +10385,12 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         self.updateChatPresentationInterfaceState(animated: true, interactive: true, { $0.updatedReportReason(ChatPresentationInterfaceState.ReportReasonData(title: reason.title, option: reason.option, message: reason.message)).updatedInterfaceState { $0.withUpdatedSelectedMessages([]) } })
     }
     
-    func displayMediaRecordingTooltip() {
+    /// `isPermissionFeedback`: the tooltip answers a tap that cannot switch modes because the chat allows only
+    /// voice or only video messages. Yougram's "Disable recording hints" hides the hint, never that feedback.
+    func displayMediaRecordingTooltip(isPermissionFeedback: Bool = false) {
+        if YougramSettings.current.disableRecordingHints && !isPermissionFeedback {
+            return
+        }
         guard let peer = self.presentationInterfaceState.renderedPeer?.peer else {
             return
         }

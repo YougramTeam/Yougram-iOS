@@ -59,6 +59,7 @@ import PeerInfoScreen
 import ChatQrCodeScreen
 import QrStudioScreen
 import UndoUI
+import YougramSettingsUI
 import ChatMessageNotificationItem
 import ChatbotSetupScreen
 import BusinessLocationSetupScreen
@@ -311,6 +312,7 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         return self.immediateExperimentalUISettingsValue.with { $0 }
     }
     private var experimentalUISettingsDisposable: Disposable?
+    private var yougramSettingsDisposable: Disposable?
     
     public var presentGlobalController: (ViewController, Any?) -> Void = { _, _ in }
     public var presentCrossfadeController: () -> Void = {}
@@ -555,7 +557,8 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         let immediateExperimentalUISettingsValue = self.immediateExperimentalUISettingsValue
         let _ = immediateExperimentalUISettingsValue.swap(initialPresentationDataAndSettings.experimentalUISettings)
         
-        GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass })
+        // Yougram's "Reduce Glass" uses the same custom implementation as the fakeGlass debug flag.
+        GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || YougramSettings.current.reduceGlass
         ManagedAudioSessionImpl.respectsSystemRecordingInput = immediateExperimentalUISettingsValue.with({ $0.respectSystemMicrophone })
         MediaEditorVideoExport.forceLegacyStoryWriter = immediateExperimentalUISettingsValue.with({ $0.storyLegacyVideoWriter })
         MediaEditorVideoExport.forceLegacyChatWriter = immediateExperimentalUISettingsValue.with({ $0.chatLegacyVideoWriter })
@@ -566,13 +569,28 @@ public final class SharedAccountContextImpl: SharedAccountContext {
                 let _ = immediateExperimentalUISettingsValue.swap(settings)
                 
                 flatBuffers_checkedGet = settings.checkSerializedData
-                GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass
+                GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass || YougramSettings.current.reduceGlass
                 ManagedAudioSessionImpl.respectsSystemRecordingInput = settings.respectSystemMicrophone
                 MediaEditorVideoExport.forceLegacyStoryWriter = settings.storyLegacyVideoWriter
                 MediaEditorVideoExport.forceLegacyChatWriter = settings.chatLegacyVideoWriter
             }
         })
-        
+
+        // Keeps YougramSettings.current (what layout code reads synchronously) in step with
+        // the shared-data entry, which the settings screen and other processes write.
+        self.yougramSettingsDisposable = (self.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.yougramSettings])
+        |> deliverOnMainQueue).start(next: { sharedData in
+            let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.yougramSettings]?.get(YougramSettings.self) ?? YougramSettings.defaultSettings
+            YougramSettings.setCurrent(settings)
+
+            // Glass views created from now on; existing ones keep their implementation until recreated.
+            GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || settings.reduceGlass
+            // Mirrors read by LegacyComponents (TGMediaEditingContext, TGMediaAssetsController), which cannot
+            // see YougramSettings.
+            UserDefaults.standard.set(settings.sendHDPhotos, forKey: "yougram.sendHDPhotos")
+            UserDefaults.standard.set(settings.hdPhotosFromClipboard, forKey: "yougram.hdPhotosFromClipboard")
+        })
+
         let _ = self.contactDataManager?.personNameDisplayOrder().start(next: { order in
             let _ = updateContactSettingsInteractively(accountManager: accountManager, { settings in
                 var settings = settings
@@ -1205,23 +1223,38 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             guard let backupData = backupData else {
                 return .complete()
             }
-            return self.accountManager.transaction { transaction -> Void in
+            return self.accountManager.transaction { transaction -> Bool in
+                var changed = false
                 transaction.updateRecord(account.id, { record in
                     guard let record = record else {
                         return nil
                     }
                     var attributes: [TelegramAccountManagerTypes.Attribute] = record.attributes.filter { attribute in
-                        if case .backupData = attribute {
+                        if case let .backupData(previous) = attribute {
+                            changed = changed || previous.data != backupData
                             return false
                         } else {
                             return true
                         }
                     }
+                    if !record.attributes.contains(where: { if case .backupData = $0 { return true } else { return false } }) {
+                        changed = true
+                    }
                     attributes.append(.backupData(AccountBackupDataAttribute(data: backupData)))
                     return AccountRecord(id: record.id, attributes: attributes, temporarySessionId: record.temporarySessionId)
                 })
+                return changed
             }
-            |> ignoreValues
+            |> deliverOnMainQueue
+            |> mapToSignal { changed -> Signal<Never, NoError> in
+                // Yougram: a new login (or new keys) is backed up to the keychain when the user
+                // turned that on. Unchanged data, as on every launch, writes nothing. (The
+                // enclosing closure already holds self strongly, as before.)
+                if changed {
+                    yougramAutoBackUpAccountsIfEnabled(sharedContext: self)
+                }
+                return .complete()
+            }
         }
     }
     

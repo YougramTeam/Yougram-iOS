@@ -13,6 +13,8 @@ import DeviceAccess
 import TelegramStringFormatting
 import PeerNameColorItem
 import WalletContext
+import YougramSettingsUI
+import TelegramUIPreferences
 
 enum SettingsSection: Int, CaseIterable {
     case edit
@@ -21,6 +23,7 @@ enum SettingsSection: Int, CaseIterable {
     case myProfile
     case wallet
     case proxy
+    case yougram
     case apps
     case shortcuts
     case advanced
@@ -88,7 +91,11 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
                 interaction.openSettings(.premiumManagement)
             }))
         } else if settings.suggestPhoneNumberConfirmation, case let .user(peer) = data.peer {
-            let phoneNumber = formatPhoneNumber(context: context, number: peer.phone ?? "")
+            var phoneNumber = formatPhoneNumber(context: context, number: peer.phone ?? "")
+            if YougramSettings.current.hidePhoneInSettings {
+                // Keep the prompt (it's about account security) but not the number.
+                phoneNumber = String(phoneNumber.map { $0.isNumber ? "•" : $0 })
+            }
             items[.phone]!.append(PeerInfoScreenInfoItem(id: 0, title: presentationData.strings.Settings_CheckPhoneNumberTitle(phoneNumber).string, text: .markdown(presentationData.strings.Settings_CheckPhoneNumberText), linkAction: { link in
                 if case .tap = link {
                     interaction.openFaq(presentationData.strings.Settings_CheckPhoneNumberFAQAnchor)
@@ -117,7 +124,39 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             }))
         }
         
-        if !settings.accountsAndPeers.isEmpty {
+        // Yougram has no account limit. From 10 accounts (this one included) the others go
+        // into a searchable box of fixed height instead of one row each.
+        if settings.accountsAndPeers.count + 1 >= 10 {
+            var boxAccounts: [PeerInfoScreenAccountsBoxItem.Account] = []
+            for (peerAccountContext, peer, badgeCount) in settings.accountsAndPeers {
+                let mappedContext = ItemListPeerItem.Context.custom(ItemListPeerItem.Context.Custom(
+                    accountPeerId: peerAccountContext.account.peerId,
+                    engine: peerAccountContext.engine,
+                    animationCache: context.animationCache,
+                    animationRenderer: context.animationRenderer,
+                    isPremiumDisabled: false,
+                    resolveInlineStickers: { fileIds in
+                        return context.engine.stickers.resolveInlineStickers(fileIds: fileIds)
+                    }
+                ))
+                boxAccounts.append(PeerInfoScreenAccountsBoxItem.Account(
+                    id: peerAccountContext.account.id,
+                    context: mappedContext,
+                    peer: peer,
+                    badge: badgeCount > 0 ? "\(compactNumericCountString(Int(badgeCount), decimalSeparator: presentationData.dateTimeFormat.decimalSeparator))" : nil
+                ))
+            }
+            items[.accounts]!.append(PeerInfoScreenAccountsBoxItem(id: "yougram.accountsBox", accounts: boxAccounts, searchPlaceholder: presentationData.strings.Yougram_Accounts_Search, noResultsText: presentationData.strings.Yougram_Accounts_NoResults, switchToAccount: { id in
+                interaction.switchToAccount(id)
+            }, logoutAccount: { id in
+                interaction.logoutAccount(id)
+            }, contextAction: { id, node, gesture in
+                interaction.accountContextMenu(id, node, gesture)
+            }))
+            items[.accounts]!.append(PeerInfoScreenActionItem(id: 100, text: presentationData.strings.Settings_AddAccount, icon: PresentationResourcesItemList.plusIconImage(presentationData.theme), action: {
+                interaction.openSettings(.addAccount)
+            }))
+        } else if !settings.accountsAndPeers.isEmpty {
             for (peerAccountContext, peer, badgeCount) in settings.accountsAndPeers {
                 let mappedContext = ItemListPeerItem.Context.custom(ItemListPeerItem.Context.Custom(
                     accountPeerId: peerAccountContext.account.peerId,
@@ -194,7 +233,11 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             }))
         }
     }
-    
+
+    items[.yougram]!.append(PeerInfoScreenDisclosureItem(id: 0, text: presentationData.strings.Yougram_Settings_Title, icon: yougramSettingsIcon, action: {
+        interaction.openSettings(.yougram)
+    }))
+
     var appIndex = 1000
     if let settings = data.globalSettings {
         for bot in settings.bots {
@@ -475,7 +518,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     }
     
     if case let .user(user) = data.peer {
-        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? ""), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
+        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(YougramSettings.current.hidePhoneInSettings ? "" : (user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? "")), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
             interaction.openSettings(.phoneNumber)
         }))
     }

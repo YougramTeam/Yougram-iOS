@@ -814,6 +814,10 @@ public final class ChatListSearchContainerNode: SearchDisplayControllerContentNo
         var filtersInsets = UIEdgeInsets(top: 0.0, left: 12.0, bottom: layout.insets(options: [.input]).bottom, right: 12.0)
         if filtersInsets.bottom == 84.0 {
             filtersInsets.bottom -= 6.0
+        } else if !YougramSettings.current.showTabLabels && (filtersInsets.bottom == 69.0 || filtersInsets.bottom == 70.0) {
+            // Tab labels hidden (Settings ▸ Yougram): the bar is 14pt thinner than the 62pt one (48pt), its search field
+            // where it was, so the filters stand where they would above the 62pt bar (its 83, and 84 less 6).
+            filtersInsets.bottom += filtersInsets.bottom == 70.0 ? 8.0 : 14.0
         }
         if layout.insets(options: [.input]).bottom <= 30.0 {
             filtersInsets = ContainerViewLayout.concentricInsets(bottomInset: layout.insets(options: [.input]).bottom, innerDiameter: 40.0, sideInset: 32.0)

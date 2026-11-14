@@ -250,6 +250,10 @@ extension ChatControllerImpl {
         
         if let avatarNode = self.avatarNode {
             avatarNode.avatarNode.setStoryStats(storyStats: contentData.state.storyStats.flatMap { storyStats -> AvatarNode.StoryStats? in
+                // Yougram: "Hide stories" drops the story ring around the chat header avatar.
+                if YougramSettings.current.hideStories {
+                    return nil
+                }
                 if storyStats.totalCount == 0 {
                     return nil
                 }
@@ -2975,12 +2979,12 @@ extension ChatControllerImpl {
                         bannedMediaInput = true
                     } else if channel.hasBannedPermission(.banSendVoice) != nil {
                         if channel.hasBannedPermission(.banSendInstantVideos) == nil {
-                            strongSelf.displayMediaRecordingTooltip()
+                            strongSelf.displayMediaRecordingTooltip(isPermissionFeedback: true)
                             return
                         }
                     } else if channel.hasBannedPermission(.banSendInstantVideos) != nil {
                         if channel.hasBannedPermission(.banSendVoice) == nil {
-                            strongSelf.displayMediaRecordingTooltip()
+                            strongSelf.displayMediaRecordingTooltip(isPermissionFeedback: true)
                             return
                         }
                     }
@@ -2989,12 +2993,12 @@ extension ChatControllerImpl {
                         bannedMediaInput = true
                     } else if group.hasBannedPermission(.banSendVoice) {
                         if !group.hasBannedPermission(.banSendInstantVideos) {
-                            strongSelf.displayMediaRecordingTooltip()
+                            strongSelf.displayMediaRecordingTooltip(isPermissionFeedback: true)
                             return
                         }
                     } else if group.hasBannedPermission(.banSendInstantVideos) {
                         if !group.hasBannedPermission(.banSendVoice) {
-                            strongSelf.displayMediaRecordingTooltip()
+                            strongSelf.displayMediaRecordingTooltip(isPermissionFeedback: true)
                             return
                         }
                     }

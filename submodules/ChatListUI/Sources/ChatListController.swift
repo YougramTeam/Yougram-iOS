@@ -292,7 +292,12 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     private var preloadStoryResourceDisposables: [MediaId: Disposable] = [:]
     
     private var sharedOpenStoryProgressDisposable = MetaDisposable()
-    
+
+    // Yougram
+    private var yougramSettingsDisposable: Disposable?
+    /// The chat search is open in the tab bar's search field (Settings ▸ Yougram ▸ Keep Search at Bottom), not the header's.
+    private var isSearchInTabBar: Bool = false
+
     var currentTooltipUpdateTimer: Foundation.Timer?
     
     let globalControlPanelsContext: GlobalControlPanelsContext
@@ -373,7 +378,14 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             hideNetworkActivityStatus: self.hideNetworkActivityStatus,
             containerNode: self.chatListDisplayNode.mainContainerNode,
             isReorderingTabs: self.isReorderingTabsValue.get(),
-            storyPostingAvailable: self.storyPostingAvailabilityValue.get() |> map { availability -> Bool in
+            // Yougram: Settings ▸ Yougram ▸ Stories ▸ Hide Stories takes the header's "Add Story" button away too.
+            storyPostingAvailable: combineLatest(
+                self.storyPostingAvailabilityValue.get(),
+                YougramSettings.updates |> map { $0.hideStories } |> distinctUntilChanged
+            ) |> map { availability, hideStories -> Bool in
+                if hideStories {
+                    return false
+                }
                 switch availability {
                 case .enabled, .premium:
                     return true
@@ -812,6 +824,16 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 if let navigationBarView = strongSelf.chatListDisplayNode.navigationBarView.view as? ChatListNavigationBar.View, let headerPanelsView = navigationBarView.headerPanels as? HeaderPanelContainerComponent.View, let tabsView = headerPanelsView.tabs as? HorizontalTabsComponent.View {
                     tabsView.updateTabSwitchFraction(fraction: fraction, isDragging: strongSelf.chatListDisplayNode.mainContainerNode.isSwitchingCurrentItemFilterByDragging, transition: ComponentTransition(transition))
                 }
+                // Yougram: the folder tabs shown at the bottom (Settings ▸ Yougram ▸ Folders at Bottom) follow the swipe too.
+                if let tabsView = strongSelf.chatListDisplayNode.bottomFolderTabsView {
+                    tabsView.updateTabSwitchFraction(fraction: fraction, isDragging: strongSelf.chatListDisplayNode.mainContainerNode.isSwitchingCurrentItemFilterByDragging, transition: ComponentTransition(transition))
+                }
+                // Yougram: Remember Last Folder. Only a settled folder is stored, not one passed during a swipe, and not
+                // before the first folder list has selected the one to open with. It is stored with the setting off too,
+                // so that turning it on remembers the folder open then.
+                if fraction.isZero && strongSelf.initializedFilters {
+                    yougramStoreLastChatListFolder(accountId: strongSelf.context.account.id, filter: filter)
+                }
             }
             self.reloadFilters()
         }
@@ -843,6 +865,24 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             }
             self.globalControlPanelsContextState = state
             self.requestLayout(transition: .animated(duration: 0.4, curve: .spring))
+        })
+
+        // Yougram: the settings that change this screen's own layout apply at once. The folder list (All Chats hidden,
+        // folders at the bottom) follows them in `reloadFilters`, the stories in the story subscriptions, the rows in
+        // `ChatListNode`.
+        self.yougramSettingsDisposable = (YougramSettings.updates
+        |> map { settings -> YougramChatListScreenSettings in
+            return YougramChatListScreenSettings(settings)
+        }
+        |> distinctUntilChanged
+        |> deliverOnMainQueue).startStrict(next: { [weak self] settings in
+            guard let self else {
+                return
+            }
+            self.updateTabBarSearchAvailability(keepBottomSearch: settings.keepBottomSearch)
+            if self.isNodeLoaded {
+                self.requestLayout(transition: .immediate)
+            }
         })
     }
 
@@ -878,8 +918,9 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             disposable.dispose()
         }
         self.globalControlPanelsContextStateDisposable?.dispose()
+        self.yougramSettingsDisposable?.dispose()
     }
-    
+
     private func updateNavigationMetadata() {
         guard let currentContext = self.secondaryContext ?? self.primaryContext else {
             return
@@ -2226,10 +2267,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 }
                 
                 var resources = resources
-                if !autodownloadEnabled {
+                // Yougram: hidden stories are not preloaded either.
+                if !autodownloadEnabled || YougramSettings.current.hideStories {
                     resources.removeAll()
                 }
-                
+
                 var validIds: [MediaId] = []
                 for (_, info) in resources.sorted(by: { $0.value.priority < $1.value.priority }) {
                     if let mediaId = info.media.id {
@@ -2255,7 +2297,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             if self.previewing {
                 self.storiesReady.set(.single(true))
             } else {
-                self.storySubscriptionsDisposable = (self.context.engine.messages.storySubscriptions(isHidden: self.location == .chatList(groupId: .archive))
+                self.storySubscriptionsDisposable = (yougramStorySubscriptions(self.context.engine.messages.storySubscriptions(isHidden: self.location == .chatList(groupId: .archive)))
                 |> deliverOnMainQueue).startStrict(next: { [weak self] rawStorySubscriptions in
                     guard let self else {
                         return
@@ -2315,7 +2357,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 })
                 
                 if case .chatList(.root) = self.location {
-                    self.storyArchiveSubscriptionsDisposable = (self.context.engine.messages.storySubscriptions(isHidden: true)
+                    self.storyArchiveSubscriptionsDisposable = (yougramStorySubscriptions(self.context.engine.messages.storySubscriptions(isHidden: true))
                     |> deliverOnMainQueue).startStrict(next: { [weak self] rawStoryArchiveSubscriptions in
                         guard let self else {
                             return
@@ -3257,6 +3299,10 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 guard let self else {
                     return
                 }
+                // Yougram: Disable Story Swipe also turns off pulling the stories row to post one.
+                if yougramDisablesStoryCameraSwipe() {
+                    return
+                }
                 self.openStoryCamera(fromList: true, gesturePullOffset: offset)
             }
             
@@ -4109,25 +4155,38 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     private func reloadFilters(firstUpdate: (() -> Void)? = nil) {
         let filterItems = chatListFilterItems(context: self.context)
         var notifiedFirstUpdate = false
+        // Yougram: Hide "All Chats" and Folders at Bottom change the folder list, so a change rebuilds it.
+        let yougramFolderSettings: Signal<YougramChatListFolderSettings, NoError> = YougramSettings.updates
+        |> map { settings -> YougramChatListFolderSettings in
+            return YougramChatListFolderSettings(settings)
+        }
+        |> distinctUntilChanged
         self.filterDisposable.set((combineLatest(queue: .mainQueue(),
             filterItems,
             self.context.account.postbox.peerView(id: self.context.account.peerId),
-            self.context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.UserLimits(isPremium: false))
+            self.context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.UserLimits(isPremium: false)),
+            yougramFolderSettings
         )
-        |> deliverOnMainQueue).startStrict(next: { [weak self] countAndFilterItems, peerView, limits in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] countAndFilterItems, peerView, limits, yougramFolderSettings in
             guard let strongSelf = self else {
                 return
             }
-            
+
             let isPremium = peerView.peers[peerView.peerId]?.isPremium
             strongSelf.isPremium = isPremium ?? false
-            
+
             let (_, items) = countAndFilterItems
+            // Yougram: Hide "All Chats" leaves All Chats out of a list that has a folder of its own: no tab, and no page
+            // to swipe to (the pages start at the first folder). Without a folder there is nothing else to show.
+            let hidesAllChats = yougramFolderSettings.hideAllChatsFolder && yougramChatListHasFolders(items.map { $0.0 })
             var filterItems: [ChatListFilterTabEntry] = []
-            
+
             for (filter, unreadCount, hasUnmutedUnread) in items {
                 switch filter {
                     case .allChats:
+                        if hidesAllChats {
+                            continue
+                        }
                         if let isPremium = isPremium, !isPremium && filterItems.count > 0 {
                             filterItems.insert(.all(unreadCount: 0), at: 0)
                         } else {
@@ -4145,21 +4204,47 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             }
             
             let firstItem = countAndFilterItems.1.first?.0 ?? .allChats
-            let firstItemEntryId: ChatListFilterTabEntryId
+            var firstItemEntryId: ChatListFilterTabEntryId
             switch firstItem {
                 case .allChats:
                     firstItemEntryId = .all
                 case let .filter(id, _, _, _):
                     firstItemEntryId = .filter(id)
             }
-            
+            // Yougram: without All Chats the list opens with its first folder.
+            let defaultEntryId: ChatListFilterTabEntryId = hidesAllChats ? (filterItems.first?.id ?? .all) : .all
+            if hidesAllChats && firstItemEntryId == .all {
+                firstItemEntryId = defaultEntryId
+            }
+            // Yougram: Remember Last Folder opens the folder that was open last, while it still exists and is not one
+            // of the folders past the free limit (locked without Premium).
+            if !strongSelf.initializedFilters && YougramSettings.current.rememberLastFolder, let lastFolder = yougramLastChatListFolder(accountId: strongSelf.context.account.id), resolvedItems.contains(where: { $0.id == lastFolder }) {
+                var isLocked = false
+                if isPremium == false, case .filter = lastFolder {
+                    let folderIds = resolvedItems.compactMap { entry -> ChatListFilterTabEntryId? in
+                        if case .filter = entry {
+                            return entry.id
+                        } else {
+                            return nil
+                        }
+                    }
+                    if let folderIndex = folderIds.firstIndex(of: lastFolder), folderIndex >= Int(limits.maxFoldersCount) {
+                        isLocked = true
+                    }
+                }
+                if !isLocked {
+                    firstItemEntryId = lastFolder
+                }
+            }
+
             var selectedEntryId = !strongSelf.initializedFilters ? firstItemEntryId : strongSelf.chatListDisplayNode.mainContainerNode.currentItemFilter
             var resetCurrentEntry = false
             if !resolvedItems.contains(where: { $0.id == selectedEntryId }) {
                 resetCurrentEntry = true
                 if let tabContainerData = strongSelf.tabContainerData {
                     var found = false
-                    if let index = tabContainerData.0.firstIndex(where: { $0.id == selectedEntryId }) {
+                    // An entry at the start has no entry before it (the range below would be invalid).
+                    if let index = tabContainerData.0.firstIndex(where: { $0.id == selectedEntryId }), index >= 1 {
                         for i in (0 ..< index - 1).reversed() {
                             if resolvedItems.contains(where: { $0.id == tabContainerData.0[i].id }) {
                                 selectedEntryId = tabContainerData.0[i].id
@@ -4169,20 +4254,24 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         }
                     }
                     if !found {
-                        selectedEntryId = .all
+                        selectedEntryId = defaultEntryId
                     }
                 } else {
-                    selectedEntryId = .all
+                    selectedEntryId = defaultEntryId
                 }
             }
             let filtersLimit = isPremium == false ? limits.maxFoldersCount : nil
-            strongSelf.tabContainerData = (resolvedItems, false, filtersLimit)
+            // Yougram: `.1` is Folders at Bottom: the tabs leave the header for a bar above the tab bar.
+            strongSelf.tabContainerData = (resolvedItems, yougramFolderSettings.foldersAtBottom, filtersLimit)
             var availableFilters: [ChatListContainerNodeFilter] = []
             var hasAllChats = false
             for item in items {
                 switch item.0 {
                     case .allChats:
                         hasAllChats = true
+                        if hidesAllChats {
+                            continue
+                        }
                         if let isPremium = isPremium, !isPremium && availableFilters.count > 0 {
                             availableFilters.insert(.all, at: 0)
                         } else {
@@ -4192,10 +4281,12 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         availableFilters.append(.filter(item.0))
                 }
             }
-            if !hasAllChats {
+            if !hasAllChats && !hidesAllChats {
                 availableFilters.insert(.all, at: 0)
             }
-            strongSelf.chatListDisplayNode.mainContainerNode.updateAvailableFilters(availableFilters, limit: filtersLimit)
+            // The swipe reaches `limit` folders and All Chats (`limit + 1` pages); without All Chats, `limit` pages.
+            let containerFiltersLimit = hidesAllChats ? filtersLimit.map { max(0, $0 - 1) } : filtersLimit
+            strongSelf.chatListDisplayNode.mainContainerNode.updateAvailableFilters(availableFilters, limit: containerFiltersLimit, preferredSelectedId: selectedEntryId)
             
             if isPremium == nil && items.isEmpty {
                 strongSelf.mainReady.set(strongSelf.chatListDisplayNode.mainContainerNode.currentItemNode.ready)
@@ -4651,9 +4742,15 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             }
             
             if strongSelf.chatListDisplayNode.mainContainerNode.currentItemNode.chatListFilter?.id == id {
-                strongSelf.chatListDisplayNode.mainContainerNode.switchToFilter(id: .all, completion: {
+                // Yougram: with All Chats hidden the list moves to another folder; with no other page it is removed in
+                // place (the new folder list brings All Chats back).
+                if let fallbackId = strongSelf.pageAfterRemovingFolder(id: id) {
+                    strongSelf.chatListDisplayNode.mainContainerNode.switchToFilter(id: fallbackId, completion: {
+                        commit()
+                    })
+                } else {
                     commit()
-                })
+                }
             } else {
                 commit()
             }
@@ -4728,8 +4825,8 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                                     guard let self else {
                                         return
                                     }
-                                    if self.chatListDisplayNode.mainContainerNode.currentItemNode.chatListFilter?.id == id {
-                                        self.chatListDisplayNode.mainContainerNode.switchToFilter(id: .all, completion: {
+                                    if self.chatListDisplayNode.mainContainerNode.currentItemNode.chatListFilter?.id == id, let fallbackId = self.pageAfterRemovingFolder(id: id) {
+                                        self.chatListDisplayNode.mainContainerNode.switchToFilter(id: fallbackId, completion: {
                                         })
                                     }
                                 }
@@ -4785,7 +4882,10 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     }
         
     private var previousSearchToggleTimestamp: Double?
-    func activateSearch(filter: ChatListSearchFilter = .chats, query: String? = nil, skipScrolling: Bool = false, searchContentNode: NavigationBarSearchContentNode?) {
+    /// `inTabBar`: the search takes the tab bar's search field (Yougram's Keep Search at Bottom) instead of the header's,
+    /// and the tab bar stays.
+    func activateSearch(filter: ChatListSearchFilter = .chats, query: String? = nil, skipScrolling: Bool = false, searchContentNode: NavigationBarSearchContentNode?, inTabBar: Bool = false) {
+        let searchContentNode = inTabBar ? nil : searchContentNode
         Task { @MainActor [weak self] in
             guard let self else {
                 return
@@ -4813,19 +4913,37 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                     // The chat side list searches one chat: no global tabs.
                     let displaySearchFilters = !self.isSideList
                     
-                    if let filterContainerNodeAndActivate = await self.chatListDisplayNode.activateSearch(placeholderNode: searchContentNode?.placeholderNode, displaySearchFilters: displaySearchFilters, hasDownloads: self.hasDownloads, initialFilter: filter, navigationController: self.navigationController as? NavigationController, searchBarIsExternal: false) {
+                    let transition: ContainedViewLayoutTransition = .animated(duration: 0.4, curve: .spring)
+                    if let filterContainerNodeAndActivate = await self.chatListDisplayNode.activateSearch(placeholderNode: searchContentNode?.placeholderNode, displaySearchFilters: displaySearchFilters, hasDownloads: self.hasDownloads, initialFilter: filter, navigationController: self.navigationController as? NavigationController, searchBarIsExternal: inTabBar) {
                         let activate = filterContainerNodeAndActivate
-                        
+
                         activate(filter != .downloads)
-                        
+
+                        // Yougram: the tab bar makes its search field when its search state becomes active (synchronously,
+                        // in the layout this asks for); the search takes it before it sets its query and tokens.
+                        var tabBarSearchBarNode: SearchBarNode?
+                        if inTabBar {
+                            self.isSearchInTabBar = true
+                            self.updateTabBarSearchState(ViewController.TabBarSearchState(isActive: true), transition: transition)
+                            if let searchBarNode = self.currentTabBarSearchNode?() as? SearchBarNode {
+                                self.chatListDisplayNode.searchDisplayController?.setSearchBar(searchBarNode)
+                                tabBarSearchBarNode = searchBarNode
+                            }
+                        }
+
                         if let searchContentNode = self.chatListDisplayNode.searchDisplayController?.contentNode as? ChatListSearchContainerNode {
                             searchContentNode.search(filter: filter, query: query)
                         }
+
+                        if filter != .downloads {
+                            tabBarSearchBarNode?.activate()
+                        }
                     }
-                    
-                    let transition: ContainedViewLayoutTransition = .animated(duration: 0.4, curve: .spring)
+
                     self.setDisplayNavigationBar(false, transition: transition)
-                    (self.parent as? TabBarController)?.updateIsTabBarHidden(true, transition: transition)
+                    if !inTabBar {
+                        (self.parent as? TabBarController)?.updateIsTabBarHidden(true, transition: transition)
+                    }
 
                     self.isSearchActive = true
                     if let navigationController = self.navigationController as? NavigationController {
@@ -4879,9 +4997,14 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         
         let transition: ContainedViewLayoutTransition = animated ? .animated(duration: 0.4, curve: .spring) : .immediate
         self.setDisplayNavigationBar(true, transition: transition)
-        
+
         completion?()
-        
+
+        // Yougram: the tab bar's search field closes back into its button (or goes, with the setting off).
+        if self.isSearchInTabBar {
+            self.isSearchInTabBar = false
+            self.updateTabBarSearchState(YougramSettings.current.keepBottomSearch ? ViewController.TabBarSearchState(isActive: false) : nil, transition: transition)
+        }
         (self.parent as? TabBarController)?.updateIsTabBarHidden(false, transition: transition)
         
         self.isSearchActive = false
@@ -6385,9 +6508,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 })
             })))
             
-            if strongSelf.chatListDisplayNode.effectiveContainerNode.currentItemNode.chatListFilter != nil {
+            // Yougram: no All Chats entry while Hide "All Chats" leaves it out of the list.
+            let showsAllChatsItem = strongSelf.chatListDisplayNode.effectiveContainerNode.currentItemNode.chatListFilter != nil && strongSelf.chatListDisplayNode.mainContainerNode.availableFilters.contains(where: { $0.id == .all })
+            if showsAllChatsItem {
                 items.append(.separator)
-                
+
                 items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.ChatList_FolderAllChats, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Chats"), color: theme.contextMenu.primaryColor)
                 }, action: { c, f in
@@ -6400,7 +6525,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             }
             
             if hasFolders {
-                if strongSelf.chatListDisplayNode.effectiveContainerNode.currentItemNode.chatListFilter == nil {
+                if !showsAllChatsItem {
                     items.append(.separator)
                 }
                 
@@ -6477,6 +6602,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     }
 
     override public func tabBarActivateSearch() {
+        // Yougram: Keep Search at Bottom searches in the tab bar's own field.
+        if self.canSearchInTabBar {
+            self.activateSearch(filter: .chats, query: nil, skipScrolling: false, searchContentNode: nil, inTabBar: true)
+            return
+        }
         self.activateSearch(filter: .chats, query: nil)
     }
 
@@ -6739,6 +6869,58 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         case .disabled:
             return false
         }
+    }
+
+    /// Whether swiping right from the first folder opens the story camera (Yougram: not with Disable Story Swipe or
+    /// Hide Stories on).
+    var isStoryCameraSwipeAvailable: Bool {
+        return self.isStoryPostingAvailable && !yougramDisablesStoryCameraSwipe()
+    }
+
+    /// The page the list shows when the open folder `id` is removed: All Chats, or with All Chats hidden (Yougram) the
+    /// first other folder; nil when no other page is left.
+    fileprivate func pageAfterRemovingFolder(id: Int32) -> ChatListFilterTabEntryId? {
+        let filters = self.chatListDisplayNode.mainContainerNode.availableFilters
+        if filters.contains(where: { $0.id == .all }) {
+            return .all
+        }
+        return filters.first(where: { $0.id != .filter(id) })?.id
+    }
+
+    // MARK: Yougram: Keep Search at Bottom
+
+    /// The root chat list offers its search in the tab bar while the setting is on (the tab bar shows a search button
+    /// for a tab with a search state).
+    private func updateTabBarSearchAvailability(keepBottomSearch: Bool) {
+        guard case .chatList(.root) = self.location, !self.isSideList, !self.previewing else {
+            return
+        }
+        let transition: ContainedViewLayoutTransition = .animated(duration: 0.4, curve: .spring)
+        if keepBottomSearch {
+            self.updateTabBarSearchState(ViewController.TabBarSearchState(isActive: self.isSearchInTabBar), transition: transition)
+        } else {
+            if self.isSearchInTabBar {
+                // The tab bar's field goes away with the setting: the search it holds closes first.
+                self.previousSearchToggleTimestamp = nil
+                self.deactivateSearch(animated: true)
+            }
+            self.updateTabBarSearchState(nil, transition: transition)
+        }
+    }
+
+    /// The search opens in the tab bar's field when the setting is on and the bar is along the bottom (a bar at the
+    /// side has no search field).
+    private var canSearchInTabBar: Bool {
+        guard case .chatList(.root) = self.location, !self.isSideList, !self.previewing else {
+            return false
+        }
+        guard YougramSettings.current.keepBottomSearch, self.tabBarSearchState != nil else {
+            return false
+        }
+        guard let tabBarController = self.parent as? TabBarController, tabBarController.showsBottomTabBar else {
+            return false
+        }
+        return true
     }
 }
 

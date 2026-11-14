@@ -1815,7 +1815,8 @@ extension ChatControllerImpl {
                         strongSelf.state.alwaysShowGiftButton = alwaysShowGiftButton
                         strongSelf.state.disallowedGifts = disallowedGifts
                         
-                        if let replyThreadId, let channel = renderedPeer?.peer as? TelegramChannel, channel.isForumOrMonoForum, strongSelf.nextChannelToReadDisposable == nil {
+                        // Yougram: "Disable auto next topic" keeps the overscroll island to the next unread topic from being offered.
+                        if let replyThreadId, let channel = renderedPeer?.peer as? TelegramChannel, channel.isForumOrMonoForum, strongSelf.nextChannelToReadDisposable == nil, !YougramSettings.current.disableAutoNextTopic {
                             strongSelf.nextChannelToReadDisposable = (combineLatest(queue: .mainQueue(),
                             context.engine.peers.getNextUnreadForumTopic(peerId: channel.id, topicId: Int32(clamping: replyThreadId)),
                                 ApplicationSpecificNotice.getNextChatSuggestionTip(accountManager: context.sharedContext.accountManager)

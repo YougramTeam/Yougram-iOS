@@ -2067,7 +2067,7 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
             }
             
             controller.completed = true
-            if !isPasteboard {
+            if !isPasteboard && !YougramSettings.current.sendHDPhotos {
                 chatMediaSendPersistHighQualityPhoto(legacyContext.isHighQualityPhoto)
             }
             let context = controller.context
@@ -3009,7 +3009,8 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
         }
         self.interaction?.displayLivePhotoIcon = displayLivePhotoIcon
         
-        let highQualityPhoto = UserDefaults.standard.bool(forKey: "TG_photoHighQuality_v0")
+        // Yougram: "Send HD Photos" starts every picker in HD, without touching the sticky choice.
+        let highQualityPhoto = UserDefaults.standard.bool(forKey: "TG_photoHighQuality_v0") || YougramSettings.current.sendHDPhotos
         if highQualityPhoto {
             self.interaction?.editingState.setHighQualityPhoto(highQualityPhoto)
         }

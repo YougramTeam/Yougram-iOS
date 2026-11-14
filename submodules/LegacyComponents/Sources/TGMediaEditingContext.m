@@ -229,6 +229,8 @@
         _cropPipe = [[SPipe alloc] init];
         _captionAbovePipe = [[SPipe alloc] init];
         _highQualityPhotoPipe = [[SPipe alloc] init];
+        // Yougram: "Send HD Photos" starts every context in HD (SharedAccountContextImpl mirrors the setting here).
+        _highQualityPhoto = [[NSUserDefaults standardUserDefaults] boolForKey:@"yougram.sendHDPhotos"];
         _livePhotoModePipe = [[SPipe alloc] init];
         _forceLivePhotoPipe = [[SPipe alloc] init];
     }

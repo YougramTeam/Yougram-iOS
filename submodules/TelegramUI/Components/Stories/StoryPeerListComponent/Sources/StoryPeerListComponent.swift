@@ -11,6 +11,13 @@ import TelegramPresentationData
 import StoryContainerScreen
 import EmojiStatusComponent
 import ChatListTitleView
+import TelegramUIPreferences
+
+/// Yougram: Disable Story Swipe (and Hide Stories) turn off pulling the row to post a story.
+private func yougramDisablesStoryCompose() -> Bool {
+    let settings = YougramSettings.current
+    return settings.disableStorySwipe || settings.hideStories
+}
 
 public final class StoryPeerListComponent: Component {
     public enum PeerStatus: Equatable {
@@ -643,7 +650,13 @@ public final class StoryPeerListComponent: Component {
         public func scrollViewDidScroll(_ scrollView: UIScrollView) {
             if !self.ignoreScrolling {
                 self.updateScrolling(transition: .immediate)
-                
+
+                // Yougram: with Disable Story Swipe the row only bounces when pulled; it does not post a story.
+                if yougramDisablesStoryCompose() {
+                    self.willComposeOnRelease = false
+                    return
+                }
+
                 let willComposeOnRelease = scrollView.contentOffset.x <= -70.0
                 if self.willComposeOnRelease != willComposeOnRelease {
                     self.willComposeOnRelease = willComposeOnRelease
@@ -676,7 +689,7 @@ public final class StoryPeerListComponent: Component {
                 
         public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             if !self.ignoreScrolling {
-                if scrollView.isScrollEnabled && scrollView.contentOffset.x <= -70.0 {
+                if scrollView.isScrollEnabled && scrollView.contentOffset.x <= -70.0 && !yougramDisablesStoryCompose() {
                     scrollView.isScrollEnabled = false
                     scrollView.panGestureRecognizer.isEnabled = false
                     scrollView.panGestureRecognizer.isEnabled = true

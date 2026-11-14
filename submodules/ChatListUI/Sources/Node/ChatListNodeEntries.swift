@@ -4,6 +4,7 @@ import TelegramCore
 import TelegramPresentationData
 import MergeLists
 import AccountContext
+import TelegramUIPreferences
 
 enum ChatListNodeEntryId: Hashable {
     case Header
@@ -615,8 +616,14 @@ struct ChatListContactPeer {
 }
 
 func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, savedMessagesPeer: EnginePeer?, foundPeers: [(EnginePeer, EnginePeer?)], hideArchivedFolderByDefault: Bool, displayArchiveIntro: Bool, mode: ChatListNodeMode, chatListLocation: ChatListControllerLocation, contacts: [ChatListContactPeer], accountPeerId: EnginePeer.Id, isMainTab: Bool) -> (entries: [ChatListNodeEntry], loading: Bool) {
+    // Yougram: Hide Stories takes the story rings off the rows and the archive; Hide Ads leaves the promoted chats
+    // (a proxy's sponsored channel, PSA chats) out. `ChatListNode` rebuilds the entries when either changes.
+    let yougramSettings = YougramSettings.current
+    let hideStories = yougramSettings.hideStories
+    let hidePromoChats = yougramSettings.hideAds
+
     var groupItems = view.groupItems
-    if isMainTab && state.archiveStoryState != nil && groupItems.isEmpty {
+    if isMainTab && !hideStories && state.archiveStoryState != nil && groupItems.isEmpty {
         groupItems.append(EngineChatList.GroupItem(
             id: .archive,
             topMessage: nil,
@@ -661,6 +668,9 @@ func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, 
     }
     
     let filteredAdditionalItemEntries = view.additionalItems.filter { item -> Bool in
+        if hidePromoChats {
+            return false
+        }
         return item.item.renderedPeer.peerId != state.hiddenPsaPeerId
     }
     
@@ -765,7 +775,7 @@ func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, 
             forumTopicData: entry.forumTopicData,
             topForumTopicItems: entry.topForumTopicItems,
             revealed: threadId == 1 && (state.hiddenItemShouldBeTemporaryRevealed || state.editing),
-            storyState: entry.renderedPeer.peerId == accountPeerId ? nil : entry.storyStats.flatMap { stats -> ChatListNodeState.StoryState in
+            storyState: (hideStories || entry.renderedPeer.peerId == accountPeerId) ? nil : entry.storyStats.flatMap { stats -> ChatListNodeState.StoryState in
                 return ChatListNodeState.StoryState(
                     stats: stats,
                     hasUnseenCloseFriends: stats.hasUnseenCloseFriends
@@ -933,7 +943,7 @@ func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, 
             for groupReference in groupItems {
                 let messageIndex = EngineMessage.Index(id: EngineMessage.Id(peerId: EnginePeer.Id(0), namespace: 0, id: 0), timestamp: 1)
                 var mappedStoryState: ChatListNodeState.StoryState?
-                if let archiveStoryState = state.archiveStoryState {
+                if let archiveStoryState = state.archiveStoryState, !hideStories {
                     mappedStoryState = archiveStoryState
                 }
                 result.append(.GroupReferenceEntry(ChatListNodeEntry.GroupReferenceEntryData(

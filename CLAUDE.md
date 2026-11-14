@@ -86,6 +86,13 @@ subsystem guides name. `PresentationStrings` cannot be built in a test process (
 `PresentationStrings.data`), so keep a decision under test strings-free. The RichTextEditor SwiftPM package keeps its
 own suite (`swift test` / `Scripts/iostest.sh`). Most modules still have no tests.
 
+### Without a Mac: typecheck Swift on Linux/WSL
+
+`build-system/LinuxTypecheck/typecheck.py` typechecks Swift modules against the real iOS SDK on Linux (WSL on a
+Windows checkout): `wsl -d Ubuntu -- python3 /mnt/c/<checkout>/build-system/LinuxTypecheck/typecheck.py --changed`.
+It reads the BUILD graph without Bazel, mirrors the genrules Swift needs, and caches by content. It does not build the
+app (no ObjC, no linking, no resources). How it works and its prerequisites: `build-system/LinuxTypecheck/CLAUDE.md`.
+
 ### Updating the running simulator after a rebuild (whole-`.app` copy)
 
 `simctl install` will NOT replace an already-installed app when the build number is unchanged (installd keeps a hard-link cache), so a rebuilt binary silently doesn't take effect. **Preferred fix: copy the whole freshly-built `.app` over the installed bundle in place.** This is more robust than swapping only the `Frameworks/TelegramUIFramework` binary (no risk of app↔framework version skew), and it preserves the account/login because the **data container is a separate path** (`.../data/Containers/Data/Application/<uuid>/`, keyed by bundle id) — only the **bundle** container is replaced, and the install-DB entry stays valid since the path + bundle id are unchanged.
@@ -184,6 +191,10 @@ host seam (the package cannot depend on the highlighter). Message rendering:
 
 A nested guide loads by itself once a file under its directory is read; read it first when planning a change to that
 subsystem from elsewhere.
+
+- **Yougram's own settings and features** (Settings ▸ Yougram, `YougramSettings`, accounts backup):
+  `submodules/YougramSettingsUI/CLAUDE.md`. Read `YougramSettings.current` in layout code; extensions read the
+  shared-data entry instead.
 
 - **Embedded watch app** (`--embedWatchApp`): `Telegram/CLAUDE.md`. `Telegram/WatchApp/` is a synced snapshot of
   `~/build/tgwatch`: never hand-edit it.

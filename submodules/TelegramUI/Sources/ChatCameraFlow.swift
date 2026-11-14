@@ -12,6 +12,7 @@ import Camera
 import CameraScreen
 import ChatMediaSend
 import ChatMediaEditorScreen
+import TelegramUIPreferences
 
 public typealias ChatCameraFlowCompletion = (_ fromGallery: Bool, _ messages: Signal<[LegacyAssetPickerEnqueueMessage], Void>, _ count: Int32, _ silently: Bool, _ scheduleTime: Int32?, _ parameters: ChatSendMessageActionSheetController.SendParameters?, _ getAnimatedTransitionSource: @escaping (String) -> UIView?, _ completion: @escaping () -> Void) -> Void
 
@@ -178,6 +179,10 @@ final class ChatCameraFlow {
 
         let editingContext = TGMediaEditingContext()
         editingContext.sendPaidMessageStars = parameters.sendPaidMessageStars
+        // Yougram: "Send HD Photos" starts the camera's batch in HD.
+        if YougramSettings.current.sendHDPhotos {
+            editingContext.setHighQualityPhoto(true)
+        }
         if parameters.initialCaption.length > 0 {
             editingContext.setForcedCaption(parameters.initialCaption)
         }

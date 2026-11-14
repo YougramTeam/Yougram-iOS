@@ -36,6 +36,13 @@ import AudioWaveform
 import DeviceProximity
 import ShimmeringLinkNode
 import StaticGlassBackground
+import TelegramUIPreferences
+
+/// Yougram: transcribe on the device, for free, where Telegram would need Premium or a trial. A boost-provided
+/// transcription is free already and stays on the server.
+private func yougramUsesLocalTranscription(arguments: ChatMessageInteractiveFileNode.Arguments) -> Bool {
+    return YougramSettings.current.localVoiceTranscription && !arguments.associatedData.isPremium && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost
+}
 
 private struct FetchControls {
     let fetch: (Bool) -> Void
@@ -373,9 +380,11 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
         
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: arguments.context.currentAppConfiguration.with { $0 })
-        
+        // Yougram: free on-device transcription replaces the Premium / trial path.
+        let useFreeLocalTranscription = yougramUsesLocalTranscription(arguments: arguments)
+
         let transcriptionText = self.forcedAudioTranscriptionText ?? transcribedText(message: EngineMessage(message))
-        if transcriptionText == nil && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+        if transcriptionText == nil && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost && !useFreeLocalTranscription {
             if premiumConfiguration.audioTransciptionTrialCount > 0 {
                 if !arguments.associatedData.isPremium {
                     if self.presentAudioTranscriptionTooltip(finished: false) {
@@ -434,9 +443,9 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 self.audioTranscriptionState = .inProgress
                 self.requestUpdateLayout(true)
                 
-                if context.sharedContext.immediateExperimentalUISettings.localTranscription {
+                if context.sharedContext.immediateExperimentalUISettings.localTranscription || useFreeLocalTranscription {
                     let appLocale = presentationData.strings.baseLanguageCode
-                    
+
                     let signal: Signal<LocallyTranscribedAudio?, NoError> = context.engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: message.id))
                     |> mapToSignal { message -> Signal<String?, NoError> in
                         guard let message = message else {
@@ -445,13 +454,27 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                         guard let file = message.media.first(where: { $0 is TelegramMediaFile }) as? TelegramMediaFile else {
                             return .single(nil)
                         }
-                        return context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                        // Waits for the whole file, downloading it if it is not there yet.
+                        let fetch = messageMediaFileInteractiveFetched(context: context, message: message._asMessage(), file: file, userInitiated: true)
+                        let completeData = context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                        |> filter { data in
+                            return data.isComplete
+                        }
                         |> take(1)
-                        |> mapToSignal { data -> Signal<String?, NoError> in
-                            if !data.isComplete {
-                                return .single(nil)
+                        |> map { data -> String? in
+                            return data.path
+                        }
+                        return Signal { subscriber in
+                            let fetchDisposable = fetch.startStandalone()
+                            let dataDisposable = completeData.startStandalone(next: { value in
+                                subscriber.putNext(value)
+                            }, completed: {
+                                subscriber.putCompletion()
+                            })
+                            return ActionDisposable {
+                                fetchDisposable.dispose()
+                                dataDisposable.dispose()
                             }
-                            return .single(data.path)
                         }
                     }
                     |> mapToSignal { result -> Signal<String?, NoError> in
@@ -477,6 +500,9 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                         
                         if let result = result {
                             let _ = arguments.context.engine.messages.storeLocallyTranscribedAudio(messageId: arguments.message.id, text: result.text, isFinal: result.isFinal, error: nil).startStandalone()
+                        } else if !isLocalAudioTranscriptionDenied {
+                            // Shown as "No speech detected"; tapping again retries.
+                            let _ = arguments.context.engine.messages.storeLocallyTranscribedAudio(messageId: arguments.message.id, text: "", isFinal: true, error: .generic).startStandalone()
                         } else {
                             strongSelf.audioTranscriptionState = .collapsed
                             strongSelf.requestUpdateLayout(true)
@@ -791,6 +817,8 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                     let premiumConfiguration = PremiumConfiguration.with(appConfiguration: arguments.context.currentAppConfiguration.with { $0 })
                     if arguments.associatedData.isPremium || arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
                         displayTranscribe = true
+                    } else if yougramUsesLocalTranscription(arguments: arguments) {
+                        displayTranscribe = true
                     } else if premiumConfiguration.audioTransciptionTrialCount > 0 {
                         if arguments.incoming {
                             if audioDuration < premiumConfiguration.audioTransciptionTrialMaxDuration {
@@ -818,7 +846,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 }
                 
                 let currentTime = Int32(Date().timeIntervalSince1970)
-                if transcribedText == nil, let cooldownUntilTime = arguments.associatedData.audioTranscriptionTrial.cooldownUntilTime, cooldownUntilTime > currentTime {
+                if transcribedText == nil, let cooldownUntilTime = arguments.associatedData.audioTranscriptionTrial.cooldownUntilTime, cooldownUntilTime > currentTime, !yougramUsesLocalTranscription(arguments: arguments) {
                     updatedAudioTranscriptionState = .locked
                 }
                 

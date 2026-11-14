@@ -346,9 +346,14 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
             rightButtons = [sortButton, addButton]
         }
         
-        // Pushed (from Settings) the header has a back button.
-        let backPressed: (() -> Void)? = { [weak self] in
-            self?.controller?.navigationController?.popViewController(animated: true)
+        // Pushed (from Settings) the header has a back button; as a root tab it has none.
+        let backPressed: (() -> Void)?
+        if self.controller?.isTabMode == true {
+            backPressed = nil
+        } else {
+            backPressed = { [weak self] in
+                self?.controller?.navigationController?.popViewController(animated: true)
+            }
         }
         let primaryContent = ChatListHeaderComponent.Content(
             title: self.presentationData.strings.Contacts_Title,

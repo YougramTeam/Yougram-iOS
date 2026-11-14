@@ -550,7 +550,8 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
         self.applyItemNodeAsCurrent(id: .all, itemNode: itemNode)
         
         let panRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.panGesture(_:)), allowedDirections: { [weak self] _ in
-            guard let self, self.availableFilters.count > 1 || (self.controller?.isStoryPostingAvailable == true && !(self.context.sharedContext.callManager?.hasActiveCall ?? false)) else {
+            // Yougram: `isStoryCameraSwipeAvailable` is false with Disable Story Swipe; the swipe between folders stays.
+            guard let self, self.availableFilters.count > 1 || (self.controller?.isStoryCameraSwipeAvailable == true && !(self.context.sharedContext.callManager?.hasActiveCall ?? false)) else {
                 return []
             }
             guard case .chatList(.root) = self.location else {
@@ -614,7 +615,7 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
         let canOpenStoryCamera = self.validLayout?.0.metrics.widthClass == .compact
             && self.availableFilters.first?.id == self.selectedId
             && !recognizer.currentAllowedDirections.intersection(.right).isEmpty
-            && self.controller?.isStoryPostingAvailable == true
+            && self.controller?.isStoryCameraSwipeAvailable == true
             && !(self.context.sharedContext.callManager?.hasActiveCall ?? false)
         let hasLiveStream = canOpenStoryCamera && self.controller?.chatListHeaderView()?.storyPeerListView()?.isLiveStreaming == true
         
@@ -897,7 +898,9 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
         }
     }
     
-    public func updateAvailableFilters(_ availableFilters: [ChatListContainerNodeFilter], limit: Int32?) {
+    /// `preferredSelectedId` is where the selection goes when the selected page leaves the list and All Chats is not in
+    /// it either (Yougram's Hide "All Chats"); otherwise it goes to All Chats, as it always did.
+    public func updateAvailableFilters(_ availableFilters: [ChatListContainerNodeFilter], limit: Int32?, preferredSelectedId: ChatListFilterTabEntryId? = nil) {
         if self.availableFilters != availableFilters {
             let apply: () -> Void = { [weak self] in
                 guard let strongSelf = self else {
@@ -910,9 +913,30 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
                 }
             }
             if !availableFilters.contains(where: { $0.id == self.selectedId }) {
-                self.switchToFilter(id: .all, completion: {
+                let targetId: ChatListFilterTabEntryId
+                if availableFilters.isEmpty || availableFilters.contains(where: { $0.id == .all }) {
+                    targetId = .all
+                } else if let preferredSelectedId, availableFilters.contains(where: { $0.id == preferredSelectedId }) {
+                    targetId = preferredSelectedId
+                } else {
+                    targetId = availableFilters[0].id
+                }
+                if self.availableFilters.contains(where: { $0.id == targetId }) {
+                    // The switch finds the target in the current list, and animates from the page being removed.
+                    self.switchToFilter(id: targetId, completion: {
+                        apply()
+                    })
+                } else {
+                    // The target is not in the current list (the first list of a screen without All Chats, or All Chats
+                    // coming back): the new list goes in first, so that the switch can find it. A page still loading
+                    // for the old list would never become current, so it is dropped.
                     apply()
-                })
+                    if let pendingItemNode = self.pendingItemNode {
+                        pendingItemNode.2.dispose()
+                        self.pendingItemNode = nil
+                    }
+                    self.switchToFilter(id: targetId, animated: false)
+                }
             } else {
                 apply()
             }
@@ -1198,7 +1222,18 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private var tapRecognizer: UITapGestureRecognizer?
     var navigationBar: NavigationBar?
     let navigationBarView = ComponentView<Empty>()
+    /// Yougram's Folders at Bottom: the folder tabs in a bar above the tab bar instead of the header.
+    private let bottomFoldersView = ComponentView<Empty>()
+    private var isDisplayingBottomFolders: Bool = false
     weak var controller: ChatListControllerImpl?
+
+    /// The folder tabs of the bottom bar while it is shown.
+    var bottomFolderTabsView: HorizontalTabsComponent.View? {
+        guard self.isDisplayingBottomFolders, let panelView = self.bottomFoldersView.view as? HeaderPanelContainerComponent.View else {
+            return nil
+        }
+        return panelView.tabs as? HorizontalTabsComponent.View
+    }
     
     private var toolbar: ComponentView<Empty>?
     var toolbarData: Toolbar?
@@ -1463,7 +1498,8 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         self.searchDisplayController?.updatePresentationData(presentationData)
     }
     
-    private func updateNavigationBar(layout: ContainerViewLayout, deferScrollApplication: Bool, transition: ComponentTransition) -> (navigationHeight: CGFloat, storiesInset: CGFloat) {
+    /// `bottomTabs`: the folder tabs, when Folders at Bottom moves them out of the header.
+    private func updateNavigationBar(layout: ContainerViewLayout, deferScrollApplication: Bool, transition: ComponentTransition) -> (navigationHeight: CGFloat, storiesInset: CGFloat, bottomTabs: AnyComponent<Empty>?) {
         let headerContent = self.controller?.updateHeaderContent()
         
         var panels: [HeaderPanelContainerComponent.Panel] = []
@@ -1567,6 +1603,7 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         }
         
         var navigationHeaderPanels: AnyComponent<Empty>?
+        var bottomTabs: AnyComponent<Empty>?
         if self.controller?.tabContainerData != nil || !panels.isEmpty {
             var tabs: AnyComponent<Empty>?
             if let tabContainerData = self.controller?.tabContainerData, tabContainerData.0.count > 1 {
@@ -1707,10 +1744,19 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
                     },
                     selectedTab: selectedTab,
                     isEditing: isEditing,
-                    liftWhileSwitching: layout.deviceMetrics.type != .tablet
+                    liftWhileSwitching: layout.deviceMetrics.type != .tablet,
+                    // Yougram: Compact Folder Tabs.
+                    compactSpacing: YougramSettings.current.compactFolderTabs
                 ))
             }
-                
+
+            // Yougram: Folders at Bottom (`tabContainerData.1`) moves the tabs out of the header, to the bar that
+            // `containerLayoutUpdated` places above the tab bar.
+            if self.controller?.tabContainerData?.1 == true {
+                bottomTabs = tabs
+                tabs = nil
+            }
+
             navigationHeaderPanels = AnyComponent(HeaderPanelContainerComponent(
                 theme: self.presentationData.theme,
                 tabs: tabs,
@@ -1818,10 +1864,10 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
                 self.view.addSubview(navigationBarComponentView)
             }
             transition.setFrame(view: navigationBarComponentView, frame: CGRect(origin: CGPoint(), size: navigationBarSize))
-            
-            return (navigationBarSize.height, 0.0)
+
+            return (navigationBarSize.height, 0.0, bottomTabs)
         } else {
-            return (0.0, 0.0)
+            return (0.0, 0.0, bottomTabs)
         }
     }
     
@@ -1896,7 +1942,68 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         guard let (layout, _, _, _, _) = self.containerLayout else {
             return
         }
-        let _ = self.updateNavigationBar(layout: layout, deferScrollApplication: false, transition: transition)
+        let navigationBarLayout = self.updateNavigationBar(layout: layout, deferScrollApplication: false, transition: transition)
+        // Yougram: the bar of Folders at Bottom shows the same tabs. Its coming or going changes the lists' insets.
+        let wasDisplayingBottomFolders = self.isDisplayingBottomFolders
+        let _ = self.updateBottomFolders(layout: layout, tabs: navigationBarLayout.bottomTabs, transition: transition)
+        if wasDisplayingBottomFolders != self.isDisplayingBottomFolders {
+            self.controller?.requestLayout(transition: transition.containedViewLayoutTransition)
+        }
+    }
+
+    /// Lays out the bar of Yougram's Folders at Bottom above the tab bar (hidden during a search), and returns how much
+    /// more of the lists' bottom it covers: zero while it is not shown.
+    private func updateBottomFolders(layout: ContainerViewLayout, tabs: AnyComponent<Empty>?, transition: ComponentTransition) -> CGFloat {
+        guard let tabs, self.isSearchDisplayControllerActive == nil else {
+            if self.isDisplayingBottomFolders {
+                self.isDisplayingBottomFolders = false
+                if let barView = self.bottomFoldersView.view {
+                    transition.setAlpha(view: barView, alpha: 0.0, completion: { [weak self, weak barView] finished in
+                        guard let self, finished, !self.isDisplayingBottomFolders else {
+                            return
+                        }
+                        barView?.removeFromSuperview()
+                    })
+                }
+            }
+            return 0.0
+        }
+
+        // A panel along the bottom edge: it keeps clear of a vertical tab bar, otherwise only of a corner block at the
+        // bottom (iPhone Duo); `safeInsets` everywhere else.
+        var sideInsets = layout.bottomEdgeSideInsets()
+        if let tabBarController = self.controller?.parent as? TabBarController, tabBarController.verticalTabBarFrame(for: layout) != nil {
+            sideInsets = (layout.safeInsets.left, layout.safeInsets.right)
+        }
+
+        var barTransition = transition
+        if self.bottomFoldersView.view?.superview == nil {
+            barTransition = .immediate
+        }
+        let barSize = self.bottomFoldersView.update(
+            transition: barTransition,
+            component: AnyComponent(HeaderPanelContainerComponent(
+                theme: self.presentationData.theme,
+                tabs: tabs,
+                panels: []
+            )),
+            environment: {},
+            containerSize: CGSize(width: max(1.0, layout.size.width - sideInsets.left - sideInsets.right), height: layout.size.height)
+        )
+        let spacing: CGFloat = 8.0
+        let barFrame = CGRect(origin: CGPoint(x: sideInsets.left, y: layout.size.height - layout.insets(options: []).bottom - spacing - barSize.height), size: barSize)
+        if let barView = self.bottomFoldersView.view {
+            if barView.superview == nil {
+                self.view.addSubview(barView)
+                barView.frame = barFrame
+                barView.alpha = 0.0
+            }
+            barTransition.setFrame(view: barView, frame: barFrame)
+            let alphaTransition: ComponentTransition = transition.animation.isImmediate && !self.isDisplayingBottomFolders ? .easeInOut(duration: 0.2) : transition
+            alphaTransition.setAlpha(view: barView, alpha: 1.0)
+        }
+        self.isDisplayingBottomFolders = true
+        return barSize.height + spacing
     }
     
     func scrollToStories(animated: Bool) {
@@ -1933,12 +2040,15 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         storiesInset = navigationBarLayout.storiesInset
         
         self.containerLayout = (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, storiesInset)
-        
+
         var insets = layout.insets(options: [.input])
         insets.top += navigationBarHeight
         insets.left += layout.safeInsets.left
         insets.right += layout.safeInsets.right
-        
+
+        // Yougram: Folders at Bottom. The lists scroll up from behind the bar, as from behind the tab bar.
+        insets.bottom += self.updateBottomFolders(layout: layout, tabs: navigationBarLayout.bottomTabs, transition: ComponentTransition(transition))
+
         if let toolbarData = self.toolbarData {
             var panelsBottomInset: CGFloat = layout.insets(options: []).bottom
             if layout.metrics.widthClass == .regular, let inputHeight = layout.inputHeight, inputHeight != 0.0 {

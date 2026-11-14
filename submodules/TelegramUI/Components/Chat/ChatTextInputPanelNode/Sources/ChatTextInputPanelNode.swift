@@ -60,6 +60,7 @@ import ChatInputContextPanelNode
 import RasterizedCompositionComponent
 import RichTextEditorUIKit
 import RichTextEditorCore
+import TelegramUIPreferences
 
 /// The chat composer's inline custom-emoji view already exposes `dynamicColor` (forwarding to its backing
 /// `InlineStickerItemLayer`), so it satisfies the editor's emoji-view contract as-is. Declared here (the one
@@ -351,6 +352,13 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     private weak var agentMenuController: ViewController?
     private var isAgentMenuOpenWaiting = false
     
+    // Yougram: the quick formatting panel under the text field while it is focused (`YougramSettings.quickFormattingPanel`).
+    private var yougramFormattingPanel: YougramQuickFormattingPanelView?
+    /// The height the panel adds below the text field in the current layout (0 while it is hidden).
+    private var yougramFormattingPanelReservedHeight: CGFloat = 0.0
+    private var yougramQuickFormattingEnabled: Bool = YougramSettings.current.quickFormattingPanel
+    private var yougramSettingsDisposable: Disposable?
+
     private var presentationInterfaceState: ChatPresentationInterfaceState?
     private var initializedPlaceholder = false
     
@@ -1132,6 +1140,18 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         if let viewForOverlayContent = self.viewForOverlayContent {
             viewForOverlayContent.addSubnode(self.viewOnceButton)
         }
+
+        // Yougram: switching the quick formatting panel on or off applies at once, to a composer already open too.
+        self.yougramSettingsDisposable = (YougramSettings.updates
+        |> deliverOnMainQueue).startStrict(next: { [weak self] settings in
+            guard let self else {
+                return
+            }
+            if self.yougramQuickFormattingEnabled != settings.quickFormattingPanel {
+                self.yougramQuickFormattingEnabled = settings.quickFormattingPanel
+                self.updateHeight(true)
+            }
+        })
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -1139,6 +1159,7 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     }
     
     deinit {
+        self.yougramSettingsDisposable?.dispose()
         self.statusDisposable.dispose()
         self.agentSelectionDisposable.dispose()
         self.agentMenuCooldown.cancel()
@@ -1468,7 +1489,8 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     
     private func textFieldMaxHeight(_ maxHeight: CGFloat, metrics: LayoutMetrics, bottomInset: CGFloat) -> CGFloat {
         let textFieldInsets = self.textFieldInsets(metrics: metrics, bottomInset: bottomInset)
-        return max(33.0, maxHeight - (textFieldInsets.top + textFieldInsets.bottom + self.textInputViewInternalInsets.top + self.textInputViewInternalInsets.bottom))
+        // Yougram: the quick formatting panel's room comes out of the text field's.
+        return max(33.0, maxHeight - (textFieldInsets.top + textFieldInsets.bottom + self.textInputViewInternalInsets.top + self.textInputViewInternalInsets.bottom) - self.yougramFormattingPanelReservedHeight)
     }
     
     private func calculateTextFieldMetrics(width: CGFloat, sendActionControlsWidth: CGFloat, maxHeight: CGFloat, metrics: LayoutMetrics, bottomInset: CGFloat, interfaceState: ChatPresentationInterfaceState) -> (accessoryButtonsWidth: CGFloat, textFieldHeight: CGFloat, isOverflow: Bool) {
@@ -1816,6 +1838,8 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         let compactBottomSideInset = self.compactBottomSideInset(bottomInset: bottomInset, deviceMetrics: deviceMetrics)
         leftInset += compactBottomSideInset
         rightInset += compactBottomSideInset
+        // Yougram: the quick formatting panel spans the composer's width, from the same side insets.
+        let yougramFormattingPanelSideInsets = (left: leftInset, right: rightInset)
         
         let placeholderColor: UIColor = interfaceState.theme.chat.inputPanel.inputPlaceholderColor
         
@@ -2782,6 +2806,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             effectiveActionButtonsSize.width += 6.0 + liveMicrophoneButtonSize.width
         }
         
+        // Yougram: decided before the text field is measured, whose maximum height leaves the panel its room.
+        let displayYougramFormattingPanel = self.yougramQuickFormattingEnabled && self.isFocused && !isAgentLayout && !displayBotStartButton && !isRecording && !hasMediaDraft && !self.extendedSearchLayout && !self.sendingTextDisabled
+        self.yougramFormattingPanelReservedHeight = displayYougramFormattingPanel ? (YougramQuickFormattingPanelView.spacing + YougramQuickFormattingPanelView.height) : 0.0
+
         let baseWidth = width - leftInset - leftMenuInset - rightInset - rightSlowModeInset
         let (accessoryButtonsWidth, textFieldHeight, isTextFieldOverflow) = self.calculateTextFieldMetrics(width: baseWidth, sendActionControlsWidth: sendActionButtonsSize.width, maxHeight: maxHeight, metrics: metrics, bottomInset: bottomInset, interfaceState: interfaceState)
         var panelHeight = self.panelHeight(textFieldHeight: textFieldHeight, metrics: metrics, bottomInset: bottomInset)
@@ -4147,10 +4175,119 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             overscrollIsland.updateAnchor(container: container, anchorFrame: anchorFrame)
         }
 
+        self.updateYougramFormattingPanel(isVisible: displayYougramFormattingPanel, contentHeight: contentHeight, width: width, sideInsets: yougramFormattingPanelSideInsets, interfaceState: interfaceState, glassTintColor: defaultGlassTintColor, transition: transition)
+
         if isAgentLayout {
             return contentHeight + self.agentContainerExtraBottomInset
         }
-        return contentHeight
+        return contentHeight + self.yougramFormattingPanelReservedHeight
+    }
+
+    /// Yougram: lays the quick formatting panel out under the text field (its frame is this panel's to set), or fades
+    /// it out. The panel is kept once made, so a focus change only animates it.
+    private func updateYougramFormattingPanel(isVisible: Bool, contentHeight: CGFloat, width: CGFloat, sideInsets: (left: CGFloat, right: CGFloat), interfaceState: ChatPresentationInterfaceState, glassTintColor: GlassBackgroundView.TintColor, transition: ContainedViewLayoutTransition) {
+        if !isVisible {
+            if let formattingPanel = self.yougramFormattingPanel {
+                formattingPanel.isUserInteractionEnabled = false
+                transition.updateAlpha(layer: formattingPanel.layer, alpha: 0.0)
+            }
+            return
+        }
+
+        var panelTransition = transition
+        let formattingPanel: YougramQuickFormattingPanelView
+        if let current = self.yougramFormattingPanel {
+            formattingPanel = current
+        } else {
+            panelTransition = .immediate
+            formattingPanel = YougramQuickFormattingPanelView(frame: CGRect())
+            formattingPanel.alpha = 0.0
+            formattingPanel.performAction = { [weak self] action in
+                self?.performYougramQuickFormattingAction(action)
+            }
+            self.yougramFormattingPanel = formattingPanel
+            self.glassBackgroundContainer.contentView.addSubview(formattingPanel)
+        }
+        if formattingPanel.alpha.isZero {
+            // Appearing again: it starts where it is going, at the row's start.
+            panelTransition = .immediate
+            formattingPanel.resetScrollPosition()
+        }
+
+        let panelFrame = CGRect(x: sideInsets.left + 8.0, y: contentHeight + YougramQuickFormattingPanelView.spacing, width: max(1.0, width - sideInsets.left - sideInsets.right - 16.0), height: YougramQuickFormattingPanelView.height)
+        panelTransition.updateFrame(view: formattingPanel, frame: panelFrame)
+        formattingPanel.update(size: panelFrame.size, theme: interfaceState.theme, strings: interfaceState.strings, isSecretChat: interfaceState.chatLocation.peerId?.namespace == Namespaces.Peer.SecretChat, glassTintColor: glassTintColor, transition: panelTransition)
+        formattingPanel.isUserInteractionEnabled = true
+        transition.updateAlpha(layer: formattingPanel.layer, alpha: 1.0)
+    }
+
+    /// Yougram: one quick formatting command, on whichever editor the composer has right now (it can switch from the
+    /// legacy text view to the native one while open). The native engine runs its own command, as the hardware
+    /// shortcuts do (`performNativeFormatShortcut`): the input-state path rebuilds the composer from an
+    /// `NSAttributedString` and would drop the engine's blocks. The legacy text view takes the Format menu's path.
+    private func performYougramQuickFormattingAction(_ action: YougramQuickFormattingAction) {
+        guard let richTextInputNode = self.richTextInputNode else {
+            return
+        }
+        if case .link = action {
+            self.interfaceInteraction?.openLinkEditing()
+            return
+        }
+
+        let nativeAction: ChatRichTextFormatAction
+        switch action {
+        case .bold:
+            nativeAction = .bold
+        case .italic:
+            nativeAction = .italic
+        case .underline:
+            nativeAction = .underline
+        case .strikethrough:
+            nativeAction = .strikethrough
+        case .monospace:
+            nativeAction = .monospace
+        case .spoiler:
+            nativeAction = .spoiler
+        case .quote:
+            nativeAction = .quote
+        case .codeBlock:
+            nativeAction = .code
+        case .clearFormatting:
+            nativeAction = .clearFormatting
+        case .link:
+            return
+        }
+        if self.performNativeFormatShortcut(nativeAction) {
+            return
+        }
+        // Only the legacy text view takes the input-state path.
+        guard richTextInputNode.inputView is ChatInputTextView else {
+            return
+        }
+        switch action {
+        case .bold:
+            self.formatAttributesBold(self)
+        case .italic:
+            self.formatAttributesItalic(self)
+        case .underline:
+            self.formatAttributesUnderline(self)
+        case .strikethrough:
+            self.formatAttributesStrikethrough(self)
+        case .monospace:
+            self.formatAttributesMonospace(self)
+        case .spoiler:
+            self.formatAttributesSpoiler(self)
+        case .quote:
+            self.formatAttributesQuote(self)
+        case .codeBlock:
+            self.formatAttributesCodeBlock(self)
+        case .clearFormatting:
+            let _ = self.performLegacyFormatShortcut({ current in
+                return chatTextInputClearFormattingAttributes(current)
+            })
+        case .link:
+            break
+        }
     }
     
     private func overscrollIslandAnchor() -> (container: UIView, anchorFrame: CGRect) {
@@ -5101,7 +5238,8 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             let baseWidth = width - leftInset - self.leftMenuInset - rightInset - self.rightSlowModeInset + self.currentTextInputBackgroundWidthOffset - additionalSideInsets.right
             let (_, textFieldHeight, _) = self.calculateTextFieldMetrics(width: baseWidth, sendActionControlsWidth: self.sendActionButtons.bounds.width, maxHeight: maxHeight, metrics: metrics, bottomInset: bottomInset, interfaceState: interfaceState)
             let panelHeight = self.panelHeight(textFieldHeight: textFieldHeight, metrics: metrics, bottomInset: bottomInset)
-            if !self.bounds.size.height.isEqual(to: panelHeight) {
+            // Yougram: the panel is as tall as the text field plus the quick formatting panel under it.
+            if !self.bounds.size.height.isEqual(to: panelHeight + self.yougramFormattingPanelReservedHeight) {
                 self.updateHeight(animated)
             } else {
                 if let richTextInputNode = self.richTextInputNode {
@@ -5235,6 +5373,11 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         if let touchDownGestureRecognizer = self.touchDownGestureRecognizer {
             self.richTextInputNode?.inputView.addGestureRecognizer(touchDownGestureRecognizer)
         }
+
+        // Yougram: the quick formatting panel shows while the field is focused.
+        if self.yougramQuickFormattingEnabled {
+            self.updateHeight(true)
+        }
     }
 
     @objc public func editableTextNodeDidBeginEditing(_ editableTextNode: ASEditableTextNode) {
@@ -5272,6 +5415,11 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         
         if let touchDownGestureRecognizer = self.touchDownGestureRecognizer {
             self.richTextInputNode?.inputView.removeGestureRecognizer(touchDownGestureRecognizer)
+        }
+
+        // Yougram: the quick formatting panel hides with the focus.
+        if self.yougramQuickFormattingEnabled || self.yougramFormattingPanelReservedHeight > 0.0 {
+            self.updateHeight(true)
         }
     }
     

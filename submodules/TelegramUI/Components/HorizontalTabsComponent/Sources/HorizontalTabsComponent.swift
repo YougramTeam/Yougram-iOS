@@ -305,7 +305,9 @@ public final class HorizontalTabsComponent: Component {
     public let isEditing: Bool
     public let layout: Layout
     public let liftWhileSwitching: Bool
-    
+    /// Half the padding around each tab's title (Yougram's Compact Folder Tabs), so more tabs fit.
+    public let compactSpacing: Bool
+
     public init(
         context: AccountContext?,
         theme: PresentationTheme,
@@ -313,7 +315,8 @@ public final class HorizontalTabsComponent: Component {
         selectedTab: Tab.Id?,
         isEditing: Bool,
         layout: Layout = .fill,
-        liftWhileSwitching: Bool = true
+        liftWhileSwitching: Bool = true,
+        compactSpacing: Bool = false
     ) {
         self.context = context
         self.theme = theme
@@ -322,6 +325,7 @@ public final class HorizontalTabsComponent: Component {
         self.isEditing = isEditing
         self.layout = layout
         self.liftWhileSwitching = liftWhileSwitching
+        self.compactSpacing = compactSpacing
     }
     
     public static func ==(lhs: HorizontalTabsComponent, rhs: HorizontalTabsComponent) -> Bool {
@@ -343,9 +347,12 @@ public final class HorizontalTabsComponent: Component {
         if lhs.liftWhileSwitching != rhs.liftWhileSwitching {
             return false
         }
+        if lhs.compactSpacing != rhs.compactSpacing {
+            return false
+        }
         return true
     }
-    
+
     private final class ScrollView: UIScrollView {
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             return super.hitTest(point, with: event)
@@ -915,7 +922,8 @@ public final class HorizontalTabsComponent: Component {
                         theme: component.theme,
                         tab: tab,
                         isSelected: false,
-                        editing: itemEditing
+                        editing: itemEditing,
+                        compactSpacing: component.compactSpacing
                     )),
                     environment: {},
                     containerSize: CGSize(width: 1000.0, height: sizeHeight - lensInset * 2.0)
@@ -927,7 +935,8 @@ public final class HorizontalTabsComponent: Component {
                         theme: component.theme,
                         tab: tab,
                         isSelected: true,
-                        editing: itemEditing
+                        editing: itemEditing,
+                        compactSpacing: component.compactSpacing
                     )),
                     environment: {},
                     containerSize: CGSize(width: 1000.0, height: sizeHeight - lensInset * 2.0)
@@ -1154,15 +1163,17 @@ private final class ItemComponent: Component {
     let tab: HorizontalTabsComponent.Tab
     let isSelected: Bool
     let editing: Editing?
-    
-    init(context: AccountContext?, theme: PresentationTheme, tab: HorizontalTabsComponent.Tab, isSelected: Bool, editing: Editing?) {
+    let compactSpacing: Bool
+
+    init(context: AccountContext?, theme: PresentationTheme, tab: HorizontalTabsComponent.Tab, isSelected: Bool, editing: Editing?, compactSpacing: Bool) {
         self.context = context
         self.theme = theme
         self.tab = tab
         self.isSelected = isSelected
         self.editing = editing
+        self.compactSpacing = compactSpacing
     }
-    
+
     static func ==(lhs: ItemComponent, rhs: ItemComponent) -> Bool {
         if lhs.theme !== rhs.theme {
             return false
@@ -1174,6 +1185,9 @@ private final class ItemComponent: Component {
             return false
         }
         if lhs.editing != rhs.editing {
+            return false
+        }
+        if lhs.compactSpacing != rhs.compactSpacing {
             return false
         }
         return true
@@ -1308,7 +1322,7 @@ private final class ItemComponent: Component {
             self.containerView.isGestureEnabled = component.editing == nil
             self.tapRecognizer?.isEnabled = component.editing == nil
             
-            let sideInset: CGFloat = 16.0
+            let sideInset: CGFloat = component.compactSpacing ? 8.0 : 16.0
             let badgeSpacing: CGFloat = 5.0
             
             var size = CGSize(width: sideInset, height: availableSize.height)

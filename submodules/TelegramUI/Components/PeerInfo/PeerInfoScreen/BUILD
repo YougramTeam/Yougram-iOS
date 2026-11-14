@@ -131,6 +131,7 @@ swift_library(
         "//submodules/MediaPlayer:UniversalMediaPlayer",
         "//submodules/WebUI",
         "//submodules/WalletContext",
+        "//submodules/YougramSettingsUI",
         "//submodules/TelegramUI/Components/Wallet/WalletSendScreen",
         "//submodules/TelegramUI/Components/Wallet/PeerWalletScreen",
         "//submodules/TelegramUI/Components/Wallet/WalletGiftStickerMediaComponent",

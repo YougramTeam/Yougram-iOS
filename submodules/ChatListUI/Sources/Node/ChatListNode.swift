@@ -1412,6 +1412,8 @@ public final class ChatListNode: ListViewImpl {
     private var pollFilterUpdatesDisposable: Disposable?
     private var chatFilterUpdatesDisposable: Disposable?
     private var updateIsMainTabDisposable: Disposable?
+    private var yougramSettingsDisposable: Disposable?
+    private var yougramSettingsValues: [Bool]?
     
     public var scrollHeightTopInset: CGFloat {
         didSet {
@@ -2038,7 +2040,30 @@ public final class ChatListNode: ListViewImpl {
                 let _ = context.engine.privacy.cleanupSessionReviews().startStandalone()
             }
         }).strict()
-        
+
+        // Yougram: the entries (story rings, promoted chats) and the rows (Compact Chat List) read these settings as
+        // they are made. A presentation-data instance of its own makes every entry differ, so a change rebuilds the
+        // entries and lays every row out again.
+        self.yougramSettingsDisposable = (YougramSettings.updates
+        |> map { settings -> [Bool] in
+            return [settings.compactChatList, settings.hideStories, settings.hideAds]
+        }
+        |> distinctUntilChanged
+        |> deliverOnMainQueue).startStrict(next: { [weak self] values in
+            guard let self else {
+                return
+            }
+            if let previousValues = self.yougramSettingsValues, previousValues != values {
+                self.updateState { state in
+                    var state = state
+                    let presentationData = state.presentationData
+                    state.presentationData = ChatListPresentationData(theme: presentationData.theme, fontSize: presentationData.fontSize, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, nameSortOrder: presentationData.nameSortOrder, nameDisplayOrder: presentationData.nameDisplayOrder, disableAnimations: presentationData.disableAnimations)
+                    return state
+                }
+            }
+            self.yougramSettingsValues = values
+        })
+
         let storageInfo: Signal<Double?, NoError>
         if !"".isEmpty, case .chatList(groupId: .root) = location, chatListFilter == nil {
             let totalSizeSignal = combineLatest(context.engine.resources.storageTotalSize(), context.engine.resources.cacheStorageTotalSize())
@@ -3254,6 +3279,7 @@ public final class ChatListNode: ListViewImpl {
         self.pollFilterUpdatesDisposable?.dispose()
         self.chatFilterUpdatesDisposable?.dispose()
         self.updateIsMainTabDisposable?.dispose()
+        self.yougramSettingsDisposable?.dispose()
     }
     
     func updateFilter(_ filter: ChatListFilter?) {

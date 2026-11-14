@@ -815,7 +815,9 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                 break
             }
         }
-        if let displayAdPeer {
+        // Yougram: "Hide ads" builds no ad context, so no sponsored message is fetched, shown or marked as seen
+        // (history entries and the bot chat's top ad panel both read this context).
+        if let displayAdPeer, !YougramSettings.current.hideAds {
             self.adMessagesContext = context.engine.messages.adMessages(peerId: displayAdPeer, activateManually: true)
         } else {
             self.adMessagesContext = nil

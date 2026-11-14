@@ -9,6 +9,7 @@ import AccountContext
 import GlassBackgroundComponent
 import ComponentFlow
 import ComponentDisplayAdapters
+import TelegramUIPreferences
 
 private final class ItemNodeDeleteButtonNode: HighlightableButtonNode {
     private let pressed: () -> Void
@@ -876,8 +877,9 @@ public final class ChatListFilterTabContainerNode: ASDisplayNode {
             }
         }
         
-        let minSpacing: CGFloat = 26.0
-        
+        // Yougram: Compact Folder Tabs.
+        let minSpacing: CGFloat = YougramSettings.current.compactFolderTabs ? 10.0 : 26.0
+
         let resolvedSideInset: CGFloat = 14.0
         var leftOffset: CGFloat = resolvedSideInset
         

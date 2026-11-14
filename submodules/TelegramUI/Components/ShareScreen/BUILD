@@ -60,6 +60,7 @@ swift_library(
         "//submodules/TelegramUI/Components/LottieComponent",
         "//submodules/TelegramUI/Components/SegmentControlComponent",
         "//submodules/UIKitRuntimeUtils",
+        "//submodules/TelegramUIPreferences",
     ],
     visibility = [
         "//visibility:public",

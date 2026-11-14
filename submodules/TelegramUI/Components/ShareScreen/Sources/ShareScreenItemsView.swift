@@ -7,6 +7,7 @@ import TelegramPresentationData
 import ViewControllerComponent
 import PeerListItemComponent
 import MultilineTextComponent
+import TelegramUIPreferences
 
 // Shared renderer for the main grid and independently retained folder pages.
 // Vertical scrolling and visible-item allocation remain owned by the sheet.
@@ -182,7 +183,8 @@ final class ShareScreenItemsView: UIView, UIScrollViewDelegate {
             self.sectionTitle.view?.isHidden = true
             var leadingPeers: [(EnginePeer?, Bool)] = []
             let showsLeadingItems = !model.defersItemsUntilFirstLoad || model.didCompleteFirstLoad
-            if showsLeadingItems && component.story != nil { leadingPeers.append((nil, true)) }
+            // Yougram: Settings ▸ Yougram ▸ "Hide Repost to Story" (the share extension leaves `story` nil itself).
+            if showsLeadingItems && component.story != nil && !YougramSettings.current.hideRepostToStory { leadingPeers.append((nil, true)) }
             if showsLeadingItems, let peer = model.accountPeer { leadingPeers.append((peer, false)) }
             let itemCount = leadingPeers.count + peers.count
             let visibleRange = shareScreenVisibleItems(min: visible.minY, max: visible.maxY, origin: y, stride: 100.0, count: itemCount, columns: columns)

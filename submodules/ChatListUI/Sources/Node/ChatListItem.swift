@@ -29,6 +29,25 @@ import MultilineTextComponent
 import MultilineTextWithEntitiesComponent
 import ShimmerEffect
 import GlassBackgroundComponent
+import TelegramUIPreferences
+
+/// Yougram's Compact Chat List: two-thirds-size avatars, a one-line preview with the author inline, and rows that fit
+/// them. Not for the chat side list, whose rows fit their content already, nor for a quick-reply list's rows.
+private func chatListItemIsCompact(_ item: ChatListItem) -> Bool {
+    guard YougramSettings.current.compactChatList else {
+        return false
+    }
+    if item.interaction.isSideListMode || item.isSideListCompactPeerRow {
+        return false
+    }
+    if case let .peer(peerData) = item.content, let customMessageListData = peerData.customMessageListData, customMessageListData.commandPrefix != nil {
+        return false
+    }
+    return true
+}
+
+/// The compact layout's avatar is this much smaller.
+private let chatListItemCompactAvatarScale: CGFloat = 1.5
 
 public enum ChatListItemContent {
     public final class ThreadInfo: Equatable {
@@ -1978,7 +1997,11 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
         } else if case let .groupReference(groupReference) = item.content {
             storyState = groupReference.storyState
         }
-        
+        // Yougram: Hide Stories, for rows whose list does not leave the rings out itself (search results).
+        if YougramSettings.current.hideStories {
+            storyState = nil
+        }
+
         var peer: EnginePeer?
         var displayAsMessage = false
         var enablePreview = true
@@ -2158,7 +2181,11 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
             }
             
             var avatarDiameter = min(60.0, floor(item.presentationData.fontSize.baseDisplaySize * 60.0 / 17.0))
-            
+            // Yougram: Compact Chat List (as in asyncLayout).
+            if chatListItemIsCompact(item) {
+                avatarDiameter = floor(avatarDiameter / chatListItemCompactAvatarScale)
+            }
+
             if case let .peer(peerData) = item.content, let customMessageListData = peerData.customMessageListData, customMessageListData.commandPrefix != nil {
                 avatarDiameter = 40.0
             }
@@ -2534,8 +2561,9 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     let forumTopicDataValue = peerData.forumTopicData
                     let topForumTopicItemsValue = peerData.topForumTopicItems
                     
-                    itemTags = peerData.tags
-                
+                    // Yougram: a compact row has no line for the folder tags.
+                    itemTags = chatListItemIsCompact(item) ? [] : peerData.tags
+
                     autoremoveTimeout = peerData.autoremoveTimeout
                 
                     messages = messagesValue
@@ -2726,6 +2754,11 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
             
             // if changed, adjust setupItem accordingly
             var avatarDiameter = min(60.0, floor(item.presentationData.fontSize.baseDisplaySize * 60.0 / 17.0))
+            // Yougram: Compact Chat List.
+            let isCompact = chatListItemIsCompact(item)
+            if isCompact {
+                avatarDiameter = floor(avatarDiameter / chatListItemCompactAvatarScale)
+            }
             let avatarLeftEdgeInset: CGFloat = item.useCommunityViewLayout ? 10.0 : 16.0
             let avatarLeftInset: CGFloat
             
@@ -2801,7 +2834,13 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     contentData = .group(peers: groupPeers)
                     hideAuthor = true
             }
-            
+            // Yougram: a compact row has no author line; the author goes before the preview instead (below), and a
+            // community's source keeps its author.
+            let hidesAuthorLine = hideAuthor
+            if isCompact {
+                hideAuthor = true
+            }
+
             var attributedText: NSAttributedString
             var hasDraft = false
             /// What VoiceOver reads in place of the last message while the row shows a draft.
@@ -2832,6 +2871,11 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                 }
             }
             
+            // Yougram: where the regular row has an author line, a compact one names the author before the preview.
+            if isCompact && !hidesAuthorLine {
+                useInlineAuthorPrefix = true
+            }
+
             // The side list's topic rows name the author before the preview, as in the design, not on a line above.
             var sideListInlineAuthor = false
             if item.interaction.isSideListMode, case let .chat(_, threadInfo, _, _, _, _, _, _, _) = contentData, threadInfo != nil {
@@ -2856,9 +2900,14 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     }
                 }
             }
-            
+            // Yougram: a compact row shows a draft as the regular row does, not the last message's author.
+            if isCompact && (draftState != nil || mediaDraftContentType != nil) {
+                inlineAuthorPrefix = nil
+            }
+
             var communitySource: (peer: EnginePeer, title: String, placement: ChatListCommunitySourcePlacement)?
-            if case let .peer(peerData) = item.content, let message = messages.last, let source = chatListCommunitySource(chatPeer: peerData.peer, message: message, hasTags: !itemTags.isEmpty) {
+            // Yougram: a compact row keeps a community's source in its one-line preview, as with tags.
+            if case let .peer(peerData) = item.content, let message = messages.last, let source = chatListCommunitySource(chatPeer: peerData.peer, message: message, hasTags: !itemTags.isEmpty || isCompact) {
                 let sourceTitle = source.peer.displayTitle(strings: item.presentationData.strings, displayOrder: item.presentationData.nameDisplayOrder)
                 if !sourceTitle.isEmpty {
                     communitySource = (source.peer, sourceTitle, source.placement)
@@ -3004,21 +3053,31 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                 
                     if inlineAuthorPrefix == nil, let mediaDraftContentType {
                         hasDraft = true
-                        authorAttributedString = NSAttributedString(string: item.presentationData.strings.DialogList_Draft, font: textFont, textColor: theme.messageDraftTextColor)
-                        
+                        // Yougram: a compact row names the draft inline, having no author line.
+                        if !isCompact {
+                            authorAttributedString = NSAttributedString(string: item.presentationData.strings.DialogList_Draft, font: textFont, textColor: theme.messageDraftTextColor)
+                        }
+
                         switch mediaDraftContentType {
                         case .audio:
                             attributedText = NSAttributedString(string: item.presentationData.strings.Message_Audio, font: textFont, textColor: theme.messageTextColor)
                         case .video:
                             attributedText = NSAttributedString(string: item.presentationData.strings.Message_VideoMessage, font: textFont, textColor: theme.messageTextColor)
                         }
+                        if isCompact {
+                            let attributedTextWithDraft = NSMutableAttributedString()
+                            attributedTextWithDraft.append(NSAttributedString(string: item.presentationData.strings.DialogList_Draft + ": ", font: textFont, textColor: theme.messageDraftTextColor))
+                            attributedTextWithDraft.append(attributedText)
+                            attributedText = attributedTextWithDraft
+                        }
                         accessibilityDraftText = "\(item.presentationData.strings.DialogList_Draft)\n\(attributedText.string)"
                     } else if inlineAuthorPrefix == nil, let draftState = draftState {
                         hasDraft = true
                         accessibilityDraftText = "\(item.presentationData.strings.DialogList_Draft)\n\(draftState.text)"
                         let draftText = stringWithAppliedEntities(draftState.text, entities: draftState.entities, baseColor: theme.messageTextColor, linkColor: theme.messageTextColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, message: nil)
-                        
-                        if !itemTags.isEmpty {
+
+                        // Yougram: a compact row names the draft inline too.
+                        if !itemTags.isEmpty || isCompact {
                             let tempAttributedText = foldLineBreaks(draftText)
                             let attributedTextWithDraft = NSMutableAttributedString()
                             attributedTextWithDraft.append(NSAttributedString(string: item.presentationData.strings.DialogList_Draft + ": ", font: textFont, textColor: theme.messageDraftTextColor))
@@ -3110,7 +3169,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                         }
                         if let communitySource, case .previewPrefix = communitySource.placement {
                             let communityPrefix = NSMutableAttributedString()
-                            let authorTitle = (hideAuthor || authorIsCurrentChat) ? nil : peerText
+                            let authorTitle = (hidesAuthorLine || authorIsCurrentChat) ? nil : peerText
                             if let author = chatListCommunityPreviewAuthor(authorTitle: authorTitle, authorId: message.author?.id, sourcePeerId: communitySource.peer.id) {
                                 communityPrefix.append(NSAttributedString(string: author, font: textFont, textColor: theme.titleColor))
                                 // The author line draws this arrow as an image, tinted like this.
@@ -4043,7 +4102,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
             let (textLayout, textApply) = textLayout(TextNodeLayoutArguments(
                 attributedString: textAttributedString,
                 backgroundColor: nil,
-                maximumNumberOfLines: (authorAttributedString == nil && itemTags.isEmpty && forumThread == nil && topForumTopicItems.isEmpty) ? 2 : 1,
+                maximumNumberOfLines: (authorAttributedString == nil && itemTags.isEmpty && forumThread == nil && topForumTopicItems.isEmpty && !isCompact) ? 2 : 1,
                 truncationType: .end,
                 constrainedSize: CGSize(width: textMaxWidth, height: .greatestFiniteMagnitude),
                 alignment: .natural,
@@ -4055,7 +4114,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
             let maxTitleLines: Int
             switch item.index {
             case .forum:
-                maxTitleLines = 2
+                maxTitleLines = isCompact ? 1 : 2
             case .chatList:
                 maxTitleLines = 1
             }
@@ -4252,7 +4311,16 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                 peerRevealOptions = []
                 peerLeftRevealOptions = []
             }
-            
+            // Yougram: a compact row is too short for a swipe option's icon above its title.
+            if isCompact {
+                peerRevealOptions = peerRevealOptions.map { option in
+                    return ItemListRevealOption(key: option.key, title: option.title, icon: .none, color: option.color, iconColor: option.iconColor, textColor: option.textColor, isDestructive: option.isDestructive)
+                }
+                peerLeftRevealOptions = peerLeftRevealOptions.map { option in
+                    return ItemListRevealOption(key: option.key, title: option.title, icon: .none, color: option.color, iconColor: option.iconColor, textColor: option.textColor, isDestructive: option.isDestructive)
+                }
+            }
+
             let (onlineLayout, onlineApply) = onlineLayout(online, onlineIsVoiceChat)
             var animateContent = false
             if let currentItem = currentItem, currentItem.content.chatLocation == item.content.chatLocation {
@@ -4272,6 +4340,16 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                 // The side list's rows fit their preview (one or two lines), as in the design.
                 let textLineCount = CGFloat(max(1, min(2, textLayout.numberOfLines)))
                 itemHeight = titleLayout.size.height + measureLayout.size.height * textLineCount + 24.0
+            } else if isCompact {
+                // Yougram: Compact Chat List. The title and one line of preview, and the topic line when the row has one
+                // (the regular row has room for three lines).
+                itemHeight += titleLayout.size.height
+                itemHeight += measureLayout.size.height * 2.0
+                itemHeight += titleSpacing
+                itemHeight += authorSpacing
+                if !authorLayout.height.isZero {
+                    itemHeight += authorLayout.height - 3.0
+                }
             } else {
                 itemHeight += titleLayout.size.height
                 itemHeight += measureLayout.size.height * 3.0
@@ -4445,7 +4523,8 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     var avatarScaleOffset: CGFloat = 0.0
                     var avatarScale: CGFloat = 1.0
                     if let inlineNavigationLocation = item.interaction.inlineNavigationLocation {
-                        let targetAvatarScale: CGFloat = floor(item.presentationData.fontSize.itemListBaseFontSize * 54.0 / 17.0) / avatarFrame.width
+                        // Yougram: a compact row's avatar shrinks by as much as a regular one (it would otherwise grow).
+                        let targetAvatarScale: CGFloat = floor(item.presentationData.fontSize.itemListBaseFontSize * 54.0 / 17.0) / (isCompact ? chatListItemCompactAvatarScale : 1.0) / avatarFrame.width
                         avatarScale = targetAvatarScale * inlineNavigationLocation.progress + 1.0 * (1.0 - inlineNavigationLocation.progress)
                         
                         let targetAvatarScaleOffset: CGFloat = -(avatarFrame.width - avatarFrame.width * avatarScale) * 0.5
@@ -4854,9 +4933,18 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     let _ = strongSelf.statusNode.transitionToState(statusState, animated: animateContent)
                     
                     let rightAccessoryVerticalOffset: CGFloat = floorToScreenPixels(-4.0 * min(1.0, item.presentationData.fontSize.itemListBaseFontSize / 17.0))
+                    // Yougram: a compact row's badges, pin and action button sit on its preview line (where the text
+                    // frame below puts it).
+                    let compactAccessoryCenterY: CGFloat? = isCompact ? (contentRect.minY + titleLayout.size.height - 2.0 + (authorLayout.height.isZero ? 0.0 : (authorLayout.height - 3.0)) + textLayout.size.height * 0.5) : nil
+                    let rightAccessoryY: (CGFloat) -> CGFloat = { height in
+                        if let compactAccessoryCenterY {
+                            return floorToScreenPixels(compactAccessoryCenterY - height * 0.5)
+                        }
+                        return contentRect.maxY - height + rightAccessoryVerticalOffset
+                    }
                     var nextBadgeX: CGFloat = contentRect.maxX
                     if let _ = currentBadgeBackgroundImage {
-                        let badgeFrame = CGRect(x: nextBadgeX - badgeLayout.width, y: contentRect.maxY - badgeLayout.height + rightAccessoryVerticalOffset, width: badgeLayout.width, height: badgeLayout.height)
+                        let badgeFrame = CGRect(x: nextBadgeX - badgeLayout.width, y: rightAccessoryY(badgeLayout.height), width: badgeLayout.width, height: badgeLayout.height)
                         
                         transition.updateFrame(node: strongSelf.badgeNode, frame: badgeFrame)
                         nextBadgeX -= badgeLayout.width + 6.0
@@ -4868,7 +4956,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     }
                     
                     if currentMentionBadgeImage != nil || currentBadgeBackgroundImage != nil {
-                        let badgeFrame = CGRect(x: nextBadgeX - mentionBadgeLayout.width, y: contentRect.maxY - mentionBadgeLayout.height + rightAccessoryVerticalOffset, width: mentionBadgeLayout.width, height: mentionBadgeLayout.height)
+                        let badgeFrame = CGRect(x: nextBadgeX - mentionBadgeLayout.width, y: rightAccessoryY(mentionBadgeLayout.height), width: mentionBadgeLayout.width, height: mentionBadgeLayout.height)
                         
                         transition.updateFrame(node: strongSelf.mentionBadgeNode, frame: badgeFrame)
                         nextBadgeX -= mentionBadgeLayout.width + 6.0
@@ -4884,7 +4972,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                         strongSelf.pinnedIconNode.isHidden = false
                         
                         let pinnedIconSize = currentPinnedIconImage.size
-                        let pinnedIconFrame = CGRect(x: nextBadgeX - pinnedIconSize.width, y: contentRect.maxY - pinnedIconSize.height + rightAccessoryVerticalOffset, width: pinnedIconSize.width, height: pinnedIconSize.height)
+                        let pinnedIconFrame = CGRect(x: nextBadgeX - pinnedIconSize.width, y: rightAccessoryY(pinnedIconSize.height), width: pinnedIconSize.width, height: pinnedIconSize.height)
                         
                         strongSelf.pinnedIconNode.frame = pinnedIconFrame
                         nextBadgeX -= pinnedIconSize.width + 6.0
@@ -4895,13 +4983,18 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     
                     if let (actionButtonTitleNodeLayout, apply) = actionButtonTitleNodeLayoutAndApply {
                         let actionButtonSideInset = floor(item.presentationData.fontSize.itemListBaseFontSize * 12.0 / 17.0)
-                        let actionButtonTopInset = floor(item.presentationData.fontSize.itemListBaseFontSize * 5.0 / 17.0)
-                        let actionButtonBottomInset = floor(item.presentationData.fontSize.itemListBaseFontSize * 4.0 / 17.0)
-                        
+                        // Yougram: a compact row's button is shorter, to fit its preview line.
+                        let actionButtonTopInset = floor(item.presentationData.fontSize.itemListBaseFontSize * (isCompact ? 2.0 : 5.0) / 17.0)
+                        let actionButtonBottomInset = floor(item.presentationData.fontSize.itemListBaseFontSize * (isCompact ? 1.0 : 4.0) / 17.0)
+
                         let actionButtonSize = CGSize(width: actionButtonTitleNodeLayout.size.width + actionButtonSideInset * 2.0, height: actionButtonTitleNodeLayout.size.height + actionButtonTopInset + actionButtonBottomInset)
                         var actionButtonFrame = CGRect(x: nextBadgeX - actionButtonSize.width, y: contentRect.minY + floor((contentRect.height - actionButtonSize.height) * 0.5), width: actionButtonSize.width, height: actionButtonSize.height)
-                        actionButtonFrame.origin.y = max(actionButtonFrame.origin.y, dateFrame.maxY + floor(item.presentationData.fontSize.itemListBaseFontSize * 4.0 / 17.0))
-                        actionButtonFrame.origin.y += 4.0
+                        if compactAccessoryCenterY != nil {
+                            actionButtonFrame.origin.y = rightAccessoryY(actionButtonSize.height)
+                        } else {
+                            actionButtonFrame.origin.y = max(actionButtonFrame.origin.y, dateFrame.maxY + floor(item.presentationData.fontSize.itemListBaseFontSize * 4.0 / 17.0))
+                            actionButtonFrame.origin.y += 4.0
+                        }
                         
                         let actionButtonNode: HighlightableButtonNode
                         var animateActionButtonIn = false

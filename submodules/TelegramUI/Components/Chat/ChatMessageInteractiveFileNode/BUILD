@@ -45,6 +45,7 @@ swift_library(
         "//submodules/AudioWaveform",
         "//submodules/DeviceProximity",
         "//submodules/TelegramUI/Components/StaticGlassBackground",
+        "//submodules/TelegramUIPreferences",
     ],
     visibility = [
         "//visibility:public",

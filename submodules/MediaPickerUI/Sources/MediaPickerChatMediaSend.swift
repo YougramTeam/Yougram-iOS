@@ -9,6 +9,7 @@ import LegacyMediaPickerUI
 import MediaEditor
 import MediaAssetsContext
 import ChatMediaSend
+import TelegramUIPreferences
 
 final class MediaPickerChatMediaSendLegacyContext: MediaPickerChatMediaSendSelection, MediaPickerChatMediaSendEditing {
     private let editingContext: TGMediaEditingContext?
@@ -49,7 +50,8 @@ final class MediaPickerChatMediaSendLegacyContext: MediaPickerChatMediaSendSelec
             disposable?.dispose()
         }
         self.forcedCaption = forcedCaption
-        self.isHighQualityPhoto = isPasteboard ? false : (editingContext?.isHighQualityPhoto() ?? false)
+        // Yougram: pasted photos are sent in HD when Settings ▸ Yougram ▸ "HD Photos from Clipboard" is on.
+        self.isHighQualityPhoto = isPasteboard ? YougramSettings.current.hdPhotosFromClipboard : (editingContext?.isHighQualityPhoto() ?? false)
     }
 
     func item(for uniqueId: String) -> NSObject? {

@@ -18,6 +18,8 @@ import PasswordSetupUI
 import InstantPageCache
 import WalletContext
 import UndoUI
+import YougramSettingsUI
+import TelegramUIPreferences
 
 extension PeerInfoScreenNode {
     func openSettings(section: PeerInfoSettingsSection) {
@@ -85,7 +87,12 @@ extension PeerInfoScreenNode {
         case .recentCalls:
             push(CallListController(context: context, mode: .navigation))
         case .contacts:
-            push(ContactsController(context: context))
+            // Yougram: with the Contacts tab shown, open the tab instead of a second Contacts screen.
+            if YougramSettings.current.showContactsTab, let rootController = self.context.sharedContext.mainWindow?.viewController as? TelegramRootControllerInterface {
+                rootController.openContacts()
+            } else {
+                push(ContactsController(context: context))
+            }
         case .devices:
             let _ = (self.activeSessionsContextAndCount.get()
             |> take(1)
@@ -153,6 +160,8 @@ extension PeerInfoScreenNode {
             push(dataAndStorageController(context: self.context))
         case .appearance:
             push(themeSettingsController(context: self.context))
+        case .yougram:
+            push(yougramSettingsController(context: self.context))
         case .language:
             push(LocalizationListController(context: self.context))
         case .premium:
@@ -227,15 +236,15 @@ extension PeerInfoScreenNode {
                 guard let strongSelf = self else {
                     return
                 }
-                var maximumAvailableAccounts: Int = 3
+                var maximumAvailableAccounts: Int = maximumNumberOfAccounts
                 if accountAndPeer?.1.isPremium == true && !strongSelf.context.account.testingEnvironment {
-                    maximumAvailableAccounts = 4
+                    maximumAvailableAccounts = maximumPremiumNumberOfAccounts
                 }
                 var count: Int = 1
                 for (accountContext, peer, _) in accountsAndPeers {
                     if !accountContext.account.testingEnvironment {
                         if peer.isPremium {
-                            maximumAvailableAccounts = 4
+                            maximumAvailableAccounts = maximumPremiumNumberOfAccounts
                         }
                         count += 1
                     }
@@ -254,6 +263,17 @@ extension PeerInfoScreenNode {
                     if let navigationController = strongSelf.context.sharedContext.mainWindow?.viewController as? NavigationController {
                         navigationController.pushViewController(controller)
                     }
+                } else if count >= 6 {
+                    // Yougram: no limit, but every account costs battery and memory; say so first.
+                    let presentationData = strongSelf.presentationData
+                    let testingEnvironment = strongSelf.context.account.testingEnvironment
+                    let sharedContext = strongSelf.context.sharedContext
+                    strongSelf.controller?.present(textAlertController(context: strongSelf.context, title: nil, text: presentationData.strings.Yougram_Accounts_SafeLimit, actions: [
+                        TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
+                        TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {
+                            sharedContext.beginNewAuth(testingEnvironment: testingEnvironment)
+                        })
+                    ]), in: .window(.root))
                 } else {
                     strongSelf.context.sharedContext.beginNewAuth(testingEnvironment: strongSelf.context.account.testingEnvironment)
                 }

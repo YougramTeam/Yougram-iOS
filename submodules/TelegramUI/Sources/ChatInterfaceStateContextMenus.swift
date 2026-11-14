@@ -1085,7 +1085,9 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         }
         
         var hasRateTranscription = false
-        if hasExpandedAudioTranscription, let audioTranscription = audioTranscription, !didRateAudioTranscription {
+        // Yougram: a transcription made on the device (local voice transcription) has id 0; there is nothing on
+        // the server to rate.
+        if hasExpandedAudioTranscription, let audioTranscription = audioTranscription, !didRateAudioTranscription, audioTranscription.id != 0 {
             hasRateTranscription = true
             actions.insert(.custom(ChatRateTranscriptionContextItem(context: context, message: message, action: { [weak context] value in
                 guard let context = context else {
@@ -1190,7 +1192,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             isReplyThreadHead = messages[0].id == replyThreadMessage.effectiveTopId
         }
         
-        if !isPinnedMessages, !isReplyThreadHead, data.canReply {
+        if !isPinnedMessages, !isReplyThreadHead, data.canReply, !YougramContextMenuAction.reply.isHidden {
             actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuReply, icon: { theme in
                 return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Reply"), color: theme.actionSheet.primaryTextColor)
             }, action: { c, _ in
@@ -1360,7 +1362,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         if !messageText.isEmpty || richMessageMarkdown != nil || (resourceAvailable && isImage) || diceEmoji != nil {
             if !isExpired {
                 if !isPoll {
-                    if !isCopyProtected {
+                    if !isCopyProtected, !YougramContextMenuAction.copy.isHidden {
                         actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuCopy, icon: { theme in
                             return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
                         }, action: { _, f in
@@ -1473,7 +1475,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                 if let peerId = chatPresentationInterfaceState.chatLocation.peerId, peerId.namespace == Namespaces.Peer.SecretChat {
                     canTranslate = false
                 }
-                if canTranslate {
+                if canTranslate, !YougramContextMenuAction.translate.isHidden {
                     actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuTranslate, icon: { theme in
                         return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Translate"), color: theme.actionSheet.primaryTextColor)
                     }, action: { _, f in
@@ -1489,7 +1491,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     })))
                 }
                 
-                if isSpeakSelectionEnabled() && !messageText.isEmpty {
+                if isSpeakSelectionEnabled() && !messageText.isEmpty && !YougramContextMenuAction.speak.isHidden {
                     actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuSpeak, icon: { theme in
                         return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Message"), color: theme.actionSheet.primaryTextColor)
                     }, action: { _, f in
@@ -1525,7 +1527,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     break
                 }
             }
-            if let mediaReference = mediaReference {
+            if let mediaReference = mediaReference, !YougramContextMenuAction.saveMedia.isHidden {
                 actions.append(.action(ContextMenuActionItem(text: isVideo ? chatPresentationInterfaceState.strings.Gallery_SaveVideo : chatPresentationInterfaceState.strings.Gallery_SaveImage, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Save"), color: theme.actionSheet.primaryTextColor)
                 }, action: { _, f in
@@ -1556,7 +1558,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
         
-        if !isCopyProtected {
+        if !isCopyProtected, !YougramContextMenuAction.saveToFiles.isHidden {
             for media in message.effectiveMedia {
                 if let file = media as? TelegramMediaFile {
                     if file.isMusic {
@@ -1607,7 +1609,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
         
-        if let _ = threadId, !isPinnedMessages {
+        if let _ = threadId, !isPinnedMessages, !YougramContextMenuAction.viewReplies.isHidden {
             let text: String
             if threadMessageCount != 0 {
                 text = chatPresentationInterfaceState.strings.Conversation_ContextViewReplies(Int32(threadMessageCount))
@@ -1642,7 +1644,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
         
-        if data.canEdit && !isPinnedMessages && !isMigrated {
+        if data.canEdit && !isPinnedMessages && !isMigrated && !YougramContextMenuAction.edit.isHidden {
             actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_MessageDialogEdit, icon: { theme in
                 return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Edit"), color: theme.actionSheet.primaryTextColor)
             }, action: { c, f in
@@ -1749,7 +1751,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             canPin = false
         }
         
-        if canPin {
+        if canPin, !YougramContextMenuAction.pin.isHidden {
             var pinnedSelectedMessageId: EngineMessage.Id?
             for message in messages {
                 if message.tags.contains(.pinned) {
@@ -1815,7 +1817,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
         
-        if let message = messages.first, let copyLinkKind = chatMessageCopyLinkKind(message: message), let channel = message.peers[message.id.peerId] as? TelegramChannel, !isReplyThreadHead, !isMigrated {
+        if let message = messages.first, let copyLinkKind = chatMessageCopyLinkKind(message: message), let channel = message.peers[message.id.peerId] as? TelegramChannel, !isReplyThreadHead, !isMigrated, !YougramContextMenuAction.copyLink.isHidden {
             actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuCopyLink, icon: { theme in
                 return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Link"), color: theme.actionSheet.primaryTextColor)
             }, action: { _, f in
@@ -1896,7 +1898,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                         
                     } else if let file = media as? TelegramMediaFile, !isCopyProtected {
                         if file.isVideo {
-                            if file.isAnimated && !file.isVideoSticker {
+                            if file.isAnimated && !file.isVideoSticker && !YougramContextMenuAction.saveGif.isHidden {
                                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_SaveGif, icon: { theme in
                                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Save"), color: theme.actionSheet.primaryTextColor)
                                 }, action: { _, f in
@@ -1953,7 +1955,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             })))
         }
         
-        if data.messageActions.options.contains(.viewStickerPack) {
+        if data.messageActions.options.contains(.viewStickerPack), !YougramContextMenuAction.viewStickerPack.isHidden {
             actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.StickerPack_ViewPack, icon: { theme in
                 return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Sticker"), color: theme.actionSheet.primaryTextColor)
             }, action: { _, f in
@@ -1962,7 +1964,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             })))
         }
 
-        if data.messageActions.options.contains(.forward) {
+        if data.messageActions.options.contains(.forward), !YougramContextMenuAction.forward.isHidden {
             if !isCopyProtected {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuForward, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
@@ -1974,11 +1976,13 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         }
         
         if data.messageActions.options.contains(.report) {
-            actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuReport, icon: { theme in
-                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Report"), color: theme.actionSheet.primaryTextColor)
-            }, action: { controller, f in
-                interfaceInteraction.reportMessages(messages, controller)
-            })))
+            if !YougramContextMenuAction.report.isHidden {
+                actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuReport, icon: { theme in
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Report"), color: theme.actionSheet.primaryTextColor)
+                }, action: { controller, f in
+                    interfaceInteraction.reportMessages(messages, controller)
+                })))
+            }
         } else if message.id.peerId.isReplies {
             actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuBlock, textColor: .destructive, icon: { theme in
                 return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Restrict"), color: theme.actionSheet.destructiveActionTextColor)
@@ -2001,7 +2005,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                 }
             }
             
-            if infoSummaryData.canViewStats, forwards >= 1 || views >= 100 {
+            if infoSummaryData.canViewStats, forwards >= 1 || views >= 100, !YougramContextMenuAction.stats.isHidden {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextViewStats, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Statistics"), color: theme.actionSheet.primaryTextColor)
                 }, action: { c, _ in
@@ -2015,7 +2019,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             clearCacheAsDelete = true
         }
         
-        if !hasViewStats, messages[0].forwardInfo == nil {
+        if !hasViewStats, messages[0].forwardInfo == nil, !YougramContextMenuAction.stats.isHidden {
             for media in message.media {
                 if let poll = media as? TelegramMediaPoll, message.id.namespace == Namespaces.Message.Cloud, poll.pollId.namespace == Namespaces.Media.CloudPoll, poll.results.canViewStats {
                     actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ViewPollStats, icon: { theme in
@@ -2072,7 +2076,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             })))
         }
 
-        if !isReplyThreadHead, (!data.messageActions.options.intersection([.deleteLocally, .deleteGlobally]).isEmpty || clearCacheAsDelete) {
+        if !isReplyThreadHead, (!data.messageActions.options.intersection([.deleteLocally, .deleteGlobally]).isEmpty || clearCacheAsDelete), !YougramContextMenuAction.delete.isHidden {
             var autoremoveDeadline: Int32?
             for attribute in message.attributes {
                 if let attribute = attribute as? AutoremoveTimeoutMessageAttribute {
@@ -2139,7 +2143,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }, action: noAction)))
         }
 
-        if !isPinnedMessages, !isReplyThreadHead, data.canSelect {
+        if !isPinnedMessages, !isReplyThreadHead, data.canSelect, !YougramContextMenuAction.select.isHidden {
             var didAddSeparator = false
             if !selectAll || messages.count == 1 {
                 if !actions.isEmpty && !didAddSeparator {
@@ -2528,8 +2532,34 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
         
+        // Yougram: actions switched off in Settings ▸ Yougram ▸ Message Menu can leave separators with nothing on
+        // one side. Without hidden actions the menu stays exactly as built.
+        if !YougramSettings.current.hiddenContextMenuActions.isEmpty {
+            actions = yougramCollapsingContextMenuSeparators(actions)
+        }
+
         return ContextController.Items(content: .list(actions), tip: nil)
     }
+}
+
+/// Drops leading and trailing separators and merges runs of them into one.
+private func yougramCollapsingContextMenuSeparators(_ items: [ContextMenuItem]) -> [ContextMenuItem] {
+    var result: [ContextMenuItem] = []
+    for item in items {
+        if case .separator = item {
+            if result.isEmpty {
+                continue
+            }
+            if let last = result.last, case .separator = last {
+                continue
+            }
+        }
+        result.append(item)
+    }
+    while let last = result.last, case .separator = last {
+        result.removeLast()
+    }
+    return result
 }
 
 private func canPerformDeleteActions(limits: LimitsConfiguration, accountPeerId: EnginePeer.Id, message: EngineRawMessage) -> Bool {
