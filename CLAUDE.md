@@ -146,6 +146,15 @@ Any visual change, and always an animated one, is verified by recording the simu
 a green build: [`AGENTS.md`](AGENTS.md), "Visual features and animations" (`simctl io recordVideo`, then
 `tools/animation_sheet.py` for labelled frame sheets, per-frame numbers and per-element tracks in points).
 
+### Yougram's identity and its CI build
+
+Yougram's bundle id (`com.yougramteam.yougram`) lives in `build-system/yougram-configuration.json`, which the
+GitHub Actions workflow (`.github/workflows/build-ipa.yml`, manual only) builds with. Its placeholder signing profiles
+are `build-system/yougram-codesigning/profiles`, generated from `build-system/fake-codesigning` by
+`build-system/yougram-codesigning/generate_profiles.py`: **rerun it after changing the bundle id**, or Make.py finds
+no profile for it. `Telegram/BUILD` already drops Telegram-only capabilities (Apple Pay merchants, notification
+filtering, background GPU) for any other bundle id.
+
 ### CI builds and external downloads
 
 GitLab CI (`.gitlab-ci.yml`) builds, uploads to TestFlight and verifies in tart VMs on the runner host; how they run,

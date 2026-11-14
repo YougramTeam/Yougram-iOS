@@ -12,7 +12,9 @@ run-name: Build IPA (${{ inputs.configuration }}, ${{ inputs.runner }}${{ !input
 #   next run picks up from there instead of starting over.
 # - Cache size budget: repository variable BAZEL_CACHE_GB (default 9, inside the free
 #   10 GB). Raise the repo's Actions cache limit in Settings > Actions before raising it.
-# - The IPA is ad-hoc signed with build-system/fake-codesigning; re-sign it to install.
+# - Bundle id: build-system/yougram-configuration.json. The IPA is signed with placeholder
+#   profiles for it (build-system/yougram-codesigning, made by its generate_profiles.py from
+#   build-system/fake-codesigning); re-sign it to install.
 
 on:
   workflow_dispatch:
@@ -185,7 +187,7 @@ jobs:
             --cacheDir="$DISK_CACHE" \
             build \
             --configurationPath="$RUNNER_TEMP/yougram-configuration.json" \
-            --codesigningInformationPath=build-system/fake-codesigning \
+            --codesigningInformationPath=build-system/yougram-codesigning \
             --configuration="$CONFIGURATION" \
             --buildNumber="$BUILD_NUMBER" \
             --disableDsym

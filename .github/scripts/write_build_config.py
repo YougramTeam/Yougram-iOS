@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Write the Make.py build configuration for CI.
 
-Starts from build-system/appstore-configuration.json (the bundle id and team id the
-fake codesigning profiles are made for) and swaps in Yougram's own Telegram API
-credentials from the YOUGRAM_API_ID / YOUGRAM_API_HASH secrets when they are set.
+Starts from build-system/yougram-configuration.json (Yougram's bundle id, and the team id
+the placeholder profiles in build-system/yougram-codesigning are made for) and swaps in
+Yougram's own Telegram API credentials from the YOUGRAM_API_ID / YOUGRAM_API_HASH secrets
+when they are set.
 """
 import json
 import os
 import sys
 
 out_path = sys.argv[1]
-with open("build-system/appstore-configuration.json") as f:
+with open("build-system/yougram-configuration.json") as f:
     config = json.load(f)
 
 api_id = os.environ.get("API_ID", "").strip()
