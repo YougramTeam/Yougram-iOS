@@ -969,7 +969,8 @@ private func loadAndStorePeerChatInfos(accountPeerId: PeerId, postbox: Postbox, 
                         
                         // A channel the account is not a member of keeps no read state (NonMemberChannelReadState.swift).
                         if dialogReadStateIsKept(peerId: peerId, responseChats: chats, storedPeer: transaction.getPeer(peerId)) {
-                            transaction.resetIncomingReadStates([peerId: [Namespaces.Message.Cloud: .idBased(maxIncomingReadId: readInboxMaxId, maxOutgoingReadId: readOutboxMaxId, maxKnownId: topMessage, count: unreadCount, markedUnread: false)]])
+                            // Yougram: a chat read in Ghost Mode keeps its read on this device.
+                            transaction.resetIncomingReadStates(yougramKeepingGhostHeldReads(transaction: transaction, [peerId: [Namespaces.Message.Cloud: .idBased(maxIncomingReadId: readInboxMaxId, maxOutgoingReadId: readOutboxMaxId, maxKnownId: topMessage, count: unreadCount, markedUnread: false)]]))
                         }
                         
                         transaction.replaceMessageTagSummary(peerId: peerId, threadId: nil, tagMask: .unseenPersonalMessage, namespace: Namespaces.Message.Cloud, customTag: nil, count: unreadMentionsCount, maxId: topMessage)

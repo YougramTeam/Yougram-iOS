@@ -2216,6 +2216,10 @@ public final class PendingMessageManager {
     }
     
     private func applySentMessage(postbox: Postbox, stateManager: AccountStateManager, message: Message, content: PendingMessageUploadedContentAndReuploadInfo, result: Api.Updates) -> Signal<Void, NoError> {
+        // Yougram: a sent message shows the sender online; Ghost Mode can end that at once.
+        if !Namespaces.Message.allScheduled.contains(message.id.namespace) && !Namespaces.Message.allQuickReply.contains(message.id.namespace) {
+            yougramGhostGoOfflineAfterSending(network: self.network)
+        }
         if let _ = message.peers[message.id.peerId] as? TelegramChannel {
             for attribute in message.attributes {
                 if let attribute = attribute as? PaidStarsMessageAttribute {
@@ -2280,6 +2284,10 @@ public final class PendingMessageManager {
     }
     
     private func applySentGroupMessages(postbox: Postbox, stateManager: AccountStateManager, messages: [Message], result: Api.Updates) -> Signal<Void, NoError> {
+        // Yougram: a sent album shows the sender online; Ghost Mode can end that at once.
+        if let message = messages.first, !Namespaces.Message.allScheduled.contains(message.id.namespace) && !Namespaces.Message.allQuickReply.contains(message.id.namespace) {
+            yougramGhostGoOfflineAfterSending(network: self.network)
+        }
         var namespace = Namespaces.Message.Cloud
         if let message = messages.first {
             if let channel = message.peers[message.id.peerId] as? TelegramChannel, channel.isMonoForum {

@@ -63,6 +63,12 @@ lives, and how to add more. It is imported at the end of `CLAUDE.md`, so it load
 - Hide sponsored content (`hideAds`): channel and bot ads, video ads, search results and promoted chats.
 
 **Privacy**
+- **Ghost Mode** (`ghostModeEnabled` and one switch per part): no read receipts, voice and video messages not marked
+  played, story views not counted, no online status, no typing, upload, sticker or other activity indicators; plus Go
+  Offline Automatically, Read on Interact (a sent message or reaction sends the reads held in that chat), Send as
+  Scheduled (12 s ahead) and Ask Before Opening Stories. TelegramCore follows `YougramCoreOptions.ghostMode`; the hooks,
+  the held-reads list and its limits are in `submodules/YougramSettingsUI/CLAUDE.md`, "Ghost Mode", and
+  `docs/state-sync.md` invariant 31.
 - Hide phone number in Settings and in your own profile (`hidePhoneInSettings`; PeerInfo header and items).
 - Hide account name in notifications (`hideAccountNameInNotifications`): `Telegram/NotificationService` reads the
   shared-data entry itself.
@@ -104,14 +110,3 @@ lives, and how to add more. It is imported at the end of `CLAUDE.md`, so it load
   (`keepBottomSearch`).
 - Hide stories, disable swipe to the story camera, hide "Repost to Story".
 - Reduce Liquid Glass (`reduceGlass`: `GlassBackgroundView.useCustomGlassImpl` in `SharedAccountContext`).
-
-## Decided against
-
-The user asked for these, and it was decided not to build them. Don't build them unless the user brings them up again
-and the decision changes:
-- keeping messages after their sender deleted them;
-- saving or forwarding in chats that restrict saving, and from secret chats, beyond what upstream allows;
-- keeping self-destructing (timed) photos and videos;
-- Ghost Mode: hiding read receipts, story views, online status and typing indicators.
-
-Telegram's own privacy settings and Premium features cover some of the last item.

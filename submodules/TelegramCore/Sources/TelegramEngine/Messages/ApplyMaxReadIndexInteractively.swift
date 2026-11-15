@@ -219,8 +219,10 @@ func _internal_toggleForumThreadUnreadMarkInteractively(transaction: Transaction
             if let entry = StoredMessageHistoryThreadInfo(data) {
                 transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: threadId, info: entry)
             }
-            
-            if peer.isForum {
+
+            // Yougram: Ghost Mode keeps the thread's read on this device.
+            if YougramCoreOptions.ghostMode.hideReadReceipts {
+            } else if peer.isForum {
                 if let inputPeer = apiInputPeer(peer) {
                     let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id)).start()
                 }
@@ -255,8 +257,10 @@ func _internal_markForumThreadAsReadInteractively(transaction: Transaction, netw
         if let entry = StoredMessageHistoryThreadInfo(data) {
             transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: threadId, info: entry)
         }
-        
-        if peer.isForum {
+
+        // Yougram: Ghost Mode keeps the thread's read on this device.
+        if YougramCoreOptions.ghostMode.hideReadReceipts {
+        } else if peer.isForum {
             if let inputPeer = apiInputPeer(peer) {
                 let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id)).start()
             }
@@ -297,8 +301,10 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
                 if let entry = StoredMessageHistoryThreadInfo(data) {
                     transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: item.threadId, info: entry)
                 }
-                
-                if peer.isForum {
+
+                // Yougram: Ghost Mode keeps the thread's read on this device.
+                if YougramCoreOptions.ghostMode.hideReadReceipts {
+                } else if peer.isForum {
                     if let inputPeer = apiInputPeer(peer) {
                         let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: item.threadId), readMaxId: messageIndex.id.id)).start()
                     }

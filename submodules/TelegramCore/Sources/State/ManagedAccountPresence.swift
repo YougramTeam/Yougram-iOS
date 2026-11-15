@@ -17,7 +17,11 @@ private final class AccountPresenceManagerImpl {
     private var onlineTimer: SignalKitTimer?
     
     private var wasOnline: Bool = false
-    
+    /// Yougram: whether the last status sent was online, so Ghost Mode knows whether there is one to end.
+    private var sentOnline: Bool = false
+    /// Yougram: Ghost Mode's "Go Offline Automatically" has appeared online once since the app came to the front.
+    private var didGoOfflineAutomatically: Bool = false
+
     init(queue: Queue, shouldKeepOnlinePresence: Signal<Bool, NoError>, network: Network) {
         self.queue = queue
         self.network = network
@@ -43,6 +47,7 @@ private final class AccountPresenceManagerImpl {
     }
     
     private func updatePresence(_ isOnline: Bool) {
+        let ghostMode = YougramCoreOptions.ghostMode
         let request: Signal<Api.Bool, MTRpcError>
         if isOnline {
             let timer = SignalKitTimer(timeout: 30.0, repeat: false, completion: { [weak self] in
@@ -53,10 +58,39 @@ private final class AccountPresenceManagerImpl {
             }, queue: self.queue)
             self.onlineTimer = timer
             timer.start()
-            request = self.network.request(Api.functions.account.updateStatus(offline: .boolFalse))
+            // Yougram: Ghost Mode. The timer keeps running either way, so a changed option takes effect within 30 s.
+            if ghostMode.hideOnline {
+                // No online status. One already sent is ended once; with none, nothing is sent, since an offline
+                // status would also show the user as last seen just now.
+                if !self.sentOnline {
+                    return
+                }
+                self.sentOnline = false
+                request = self.network.request(Api.functions.account.updateStatus(offline: .boolTrue))
+            } else if ghostMode.autoOffline {
+                // Online once, then offline at once: repeated every 30 s it would blink online.
+                if self.didGoOfflineAutomatically {
+                    return
+                }
+                self.didGoOfflineAutomatically = true
+                self.sentOnline = false
+                request = self.network.request(Api.functions.account.updateStatus(offline: .boolFalse))
+                |> then(self.network.request(Api.functions.account.updateStatus(offline: .boolTrue)))
+            } else {
+                self.didGoOfflineAutomatically = false
+                self.sentOnline = true
+                request = self.network.request(Api.functions.account.updateStatus(offline: .boolFalse))
+            }
         } else {
             self.onlineTimer?.invalidate()
             self.onlineTimer = nil
+            self.didGoOfflineAutomatically = false
+            // Yougram: with Ghost Mode keeping the status offline there is nothing to end, and an offline status would
+            // show the user as last seen just now.
+            if (ghostMode.hideOnline || ghostMode.autoOffline) && !self.sentOnline {
+                return
+            }
+            self.sentOnline = false
             request = self.network.request(Api.functions.account.updateStatus(offline: .boolTrue))
         }
         self.isPerformingUpdate.set(true)

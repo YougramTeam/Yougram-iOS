@@ -28,6 +28,36 @@ Yougram's own options. The model is `YougramSettings` in
 `YougramEntriesBuilder`): main screen (header, Categories, Links), General, Appearance, Chats, Privacy, Message Menu.
 Toggles bind to a `WritableKeyPath<YougramSettings, Bool>`; `requiresRestart: true` shows a restart notice.
 
+## Ghost Mode (Privacy ▸ Ghost Mode)
+
+- **Settings**: a master switch (`ghostModeEnabled`, off by default) and one field per part, most on by default (Go
+  Offline Automatically, Send as Scheduled and Ask Before Opening Stories are off). `ghostCoreOptions` combines them into
+  `YougramCoreOptions.ghostMode`, so TelegramCore sees a part as on only while the master switch is too. Extensions and
+  tests see every part off.
+- **TelegramCore** (`State/YougramGhostMode.swift` holds the helpers; each hook carries a `// Yougram:` comment):
+  - Read receipts: `synchronizePeerReadState` holds the read instead of pushing it. **Held chats are listed in the
+    preferences entry `YougramGhostHeldReads`, and that list is what stops validation from retrying in a tight
+    loop**: `docs/state-sync.md` invariant 31 has the rule. Forum-topic and monoforum reads are skipped
+    (`ReplyThreadHistory`, `ApplyMaxReadIndexInteractively`).
+  - Voice and video messages: `_internal_markMessageContentAsConsumedInteractively` marks them played locally only.
+    Self-destructing media still reports (`yougramGhostKeepsContentConsumptionLocal`).
+  - Stories: `_internal_markStoryAsSeen` moves the local `maxReadId` and queues no `readStories`; no
+    `incrementStoryViews`.
+  - Online status: `AccountPresenceManagerImpl.updatePresence`. Hidden means nothing is sent at all (an offline status
+    would show "last seen just now"); one online status already sent is ended once. Go Offline Automatically sends
+    online once, then offline, per foreground, and offline after every sent message (`applySentMessage`,
+    `applySentGroupMessages`).
+  - Activity indicators: `requestActivity` (`yougramGhostHidesActivity`); speaking in a voice chat is never hidden.
+  - Read on Interact: `enqueueMessages(account:)` and `updateMessageReactionsInteractively` push the chat's held read
+    (`yougramPushHeldReadState`), or a forum topic's or monoforum thread's mark.
+  - Send as Scheduled: `enqueueMessages(account:)` adds `OutgoingScheduleInfoMessageAttribute` 12 s ahead
+    (`yougramGhostScheduledMessages`, which lists what it leaves alone).
+- **Ask Before Opening Stories**: `StoryContainerScreen` holds every `markAsSeen` while its alert is up
+  (`yougramGhostStoryWarningHolds`); "Turn On Ghost Mode" marks the waiting stories only after the setting has reached
+  TelegramCore.
+- **Limits**: reads stay on this device, so other devices and the sender's count still show them unread. A forum
+  topic's or monoforum thread's read can come back from the server.
+
 ## Passcode: scrambled keypad and duress code
 
 - **Scrambled keypad** (`scramblePasscodeKeypad`): the lock screen's `PasscodeEntryKeyboardNode.setScrambled` reorders

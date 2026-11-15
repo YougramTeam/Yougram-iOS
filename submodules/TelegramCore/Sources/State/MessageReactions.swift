@@ -22,11 +22,11 @@ public enum UpdateMessageReaction {
 }
 
 public func updateMessageReactionsInteractively(account: Account, messageIds: [MessageId], reactions: [UpdateMessageReaction], isLarge: Bool, storeAsRecentlyUsed: Bool, add: Bool = false) -> Signal<Never, NoError> {
-    return account.postbox.transaction { transaction -> Void in
+    return account.postbox.transaction { transaction -> (peerId: PeerId, threadId: Int64?)? in
         guard let chatPeerId = messageIds.first?.peerId else {
-            return
+            return nil
         }
-        
+
         var messagesWithoutGroups: [Message] = []
         var messagesByGroupId: [Int64: [Message]] = [:]
         
@@ -168,8 +168,21 @@ public func updateMessageReactionsInteractively(account: Account, messageIds: [M
                 return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
             })
         }
+
+        // Yougram: a reaction is an interaction for Ghost Mode's Read on Interact (not one in Saved Messages, where
+        // reactions are tags).
+        if reactions.isEmpty || chatPeerId == account.peerId {
+            return nil
+        }
+        return (chatPeerId, messages.first?.threadId)
     }
-    |> ignoreValues
+    |> mapToSignal { readOnInteract -> Signal<Never, NoError> in
+        // Started on its own, so the reaction completes as soon as it is stored, as before.
+        if let readOnInteract {
+            let _ = _internal_yougramReadOnInteract(postbox: account.postbox, network: account.network, stateManager: account.stateManager, peerId: readOnInteract.peerId, threadId: readOnInteract.threadId).startStandalone()
+        }
+        return .complete()
+    }
 }
 
 func _internal_sendStarsReactionsInteractively(account: Account, messageId: MessageId, count: Int, privacy: TelegramPaidReactionPrivacy?) -> Signal<TelegramPaidReactionPrivacy, NoError> {

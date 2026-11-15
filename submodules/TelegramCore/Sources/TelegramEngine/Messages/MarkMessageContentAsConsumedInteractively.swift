@@ -8,14 +8,16 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
         if let message = transaction.getMessage(messageId), message.flags.contains(.Incoming) {
             var updateMessage = false
             var updatedAttributes = message.attributes
-            
+
             for i in 0 ..< updatedAttributes.count {
                 if let attribute = updatedAttributes[i] as? ConsumableContentMessageAttribute {
                     if !attribute.consumed {
                         updatedAttributes[i] = ConsumableContentMessageAttribute(consumed: true)
                         updateMessage = true
-                        
-                        if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
+
+                        if yougramGhostKeepsContentConsumptionLocal(message) {
+                            // Yougram: Ghost Mode marks the voice or video message played on this device only.
+                        } else if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                             if let state = transaction.getPeerChatState(message.id.peerId) as? SecretChatState {
                                 var layer: SecretChatLayer?
                                 switch state.embeddedState {

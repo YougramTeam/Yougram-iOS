@@ -23,6 +23,7 @@ private enum YougramScreen {
     case appearance
     case chats
     case privacy
+    case ghostMode
     case contextMenu
 }
 
@@ -54,6 +55,9 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, st
         b.toggle(strings.Yougram_General_HideAds, settings, \.hideAds)
         b.info(strings.Yougram_General_HideAdsInfo)
     case .privacy:
+        b.link(strings.Yougram_Ghost_Title, label: settings.ghostModeEnabled ? strings.Yougram_Ghost_On : strings.Yougram_Ghost_Off, to: .ghostMode)
+        b.info(strings.Yougram_Privacy_GhostModeInfo)
+        b.newSection()
         b.toggle(strings.Yougram_Privacy_HidePhone, settings, \.hidePhoneInSettings)
         b.info(strings.Yougram_Privacy_HidePhoneInfo)
         b.newSection()
@@ -64,6 +68,37 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, st
         b.toggle(strings.Yougram_Privacy_ScrambleKeypad, settings, \.scramblePasscodeKeypad)
         b.link(strings.Yougram_Privacy_DuressCode, to: .duressCode)
         b.info(strings.Yougram_Privacy_ScrambleKeypadInfo)
+    case .ghostMode:
+        b.toggle(strings.Yougram_Ghost_Title, settings, \.ghostModeEnabled)
+        b.info(strings.Yougram_Ghost_EnableInfo)
+        b.newSection()
+        b.header(strings.Yougram_Ghost_DontSend)
+        b.toggle(strings.Yougram_Ghost_ReadReceipts, settings, \.ghostHideReadReceipts)
+        b.toggle(strings.Yougram_Ghost_VoiceListened, settings, \.ghostHideVoiceListened)
+        b.toggle(strings.Yougram_Ghost_RoundWatched, settings, \.ghostHideRoundWatched)
+        b.toggle(strings.Yougram_Ghost_StoryViews, settings, \.ghostHideStoryViews)
+        b.toggle(strings.Yougram_Ghost_Online, settings, \.ghostHideOnline)
+        b.info(strings.Yougram_Ghost_DontSendInfo)
+        b.newSection()
+        b.header(strings.Yougram_Ghost_Activity)
+        b.toggle(strings.Yougram_Ghost_Typing, settings, \.ghostHideTyping)
+        b.toggle(strings.Yougram_Ghost_Uploading, settings, \.ghostHideUploading)
+        b.toggle(strings.Yougram_Ghost_ChoosingSticker, settings, \.ghostHideChoosingSticker)
+        b.toggle(strings.Yougram_Ghost_OtherActivities, settings, \.ghostHideOtherActivities)
+        b.info(strings.Yougram_Ghost_ActivityInfo)
+        b.newSection()
+        b.header(strings.Yougram_Ghost_Options)
+        b.toggle(strings.Yougram_Ghost_AutoOffline, settings, \.ghostAutoOffline)
+        b.info(strings.Yougram_Ghost_AutoOfflineInfo)
+        b.newSection()
+        b.toggle(strings.Yougram_Ghost_ReadOnInteract, settings, \.ghostReadOnInteract)
+        b.info(strings.Yougram_Ghost_ReadOnInteractInfo)
+        b.newSection()
+        b.toggle(strings.Yougram_Ghost_SendAsScheduled, settings, \.ghostSendAsScheduled)
+        b.info(strings.Yougram_Ghost_SendAsScheduledInfo)
+        b.newSection()
+        b.toggle(strings.Yougram_Ghost_StoryWarning, settings, \.ghostStoryWarning)
+        b.info(strings.Yougram_Ghost_StoryWarningInfo)
     case .appearance:
         b.header(strings.Yougram_Appearance_ChatList)
         b.toggle(strings.Yougram_Appearance_CompactChatList, settings, \.compactChatList)
@@ -174,6 +209,8 @@ private func yougramTitle(_ screen: YougramScreen, strings: PresentationStrings)
         return strings.Yougram_Settings_Chats
     case .privacy:
         return strings.Yougram_Settings_Privacy
+    case .ghostMode:
+        return strings.Yougram_Ghost_Title
     case .contextMenu:
         return strings.Yougram_ContextMenu_Title
     }
@@ -215,6 +252,8 @@ private func yougramScreenController(context: AccountContext, screen: YougramScr
             pushControllerImpl?(yougramScreenController(context: context, screen: .chats))
         case .privacy:
             pushControllerImpl?(yougramScreenController(context: context, screen: .privacy))
+        case .ghostMode:
+            pushControllerImpl?(yougramScreenController(context: context, screen: .ghostMode))
         case .contextMenu:
             pushControllerImpl?(yougramScreenController(context: context, screen: .contextMenu))
         case .accountsBackup:

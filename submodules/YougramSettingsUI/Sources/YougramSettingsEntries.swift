@@ -15,6 +15,7 @@ enum YougramSettingsLink: Equatable {
     case appearance
     case chats
     case privacy
+    case ghostMode
     case accountsBackup
     case contextMenu
     case duressCode

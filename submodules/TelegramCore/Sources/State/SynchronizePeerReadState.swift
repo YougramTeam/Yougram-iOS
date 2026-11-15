@@ -209,9 +209,16 @@ private func validatePeerReadState(network: Network, postbox: Postbox, stateMana
                 loop: for (namespace, currentState) in currentReadState.states {
                     if namespace == Namespaces.Message.Cloud {
                         switch currentState {
-                        case let .idBased(localMaxIncomingReadId, _, _, _, _):
-                            if case let .idBased(updatedMaxIncomingReadId, _, _, updatedCount, updatedMarkedUnread) = readState {
+                        case let .idBased(localMaxIncomingReadId, localMaxOutgoingReadId, _, localCount, localMarkedUnread):
+                            if case let .idBased(updatedMaxIncomingReadId, updatedMaxOutgoingReadId, updatedMaxKnownId, updatedCount, updatedMarkedUnread) = readState {
                                 if localReadMarkIsAheadOfServer(localMaxIncomingReadId: localMaxIncomingReadId, serverMaxIncomingReadId: updatedMaxIncomingReadId, serverCount: updatedCount, serverMarkedUnread: updatedMarkedUnread) {
+                                    // Yougram: a read Ghost Mode kept on this device is ahead of the server on purpose, and no push
+                                    // is coming to catch it up. Keep the local mark and count, take the server's outgoing mark
+                                    // and newest id, and end the validation (resetting confirms it) instead of retrying.
+                                    if yougramGhostReadIsHeld(transaction: transaction, peerId: peerId) {
+                                        transaction.resetIncomingReadStates([peerId: [namespace: .idBased(maxIncomingReadId: localMaxIncomingReadId, maxOutgoingReadId: max(localMaxOutgoingReadId, updatedMaxOutgoingReadId), maxKnownId: updatedMaxKnownId, count: localCount, markedUnread: localMarkedUnread)]])
+                                        return nil
+                                    }
                                     return .retry
                                 }
                             }
@@ -222,6 +229,8 @@ private func validatePeerReadState(network: Network, postbox: Postbox, stateMana
                     }
                 }
             }
+            // Yougram: the server has caught up with any read Ghost Mode held here.
+            yougramReleaseGhostRead(transaction: transaction, peerId: peerId)
             var updatedReadState = readState
             if case let .idBased(updatedMaxIncomingReadId, updatedMaxOutgoingReadId, updatedMaxKnownId, updatedCount, updatedMarkedUnread) = readState, let readStates = transaction.getPeerReadStates(peerId) {
                 for (namespace, state) in readStates {
@@ -399,6 +408,8 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
     let verifiedState = pushedState
     |> mapToSignal { namespaceAndReadState -> Signal<Never, PeerReadStateValidationError> in
         return stateManager.addCustomOperation(postbox.transaction { transaction -> PeerReadStateValidationError? in
+            // Yougram: a read Ghost Mode held in this chat has now reached the server.
+            yougramReleaseGhostReadIfCaughtUp(transaction: transaction, peerId: peerId, pushedState: namespaceAndReadState.1)
             if let readStates = transaction.getPeerReadStates(peerId) {
                 for (namespace, currentReadState) in readStates where namespace == namespaceAndReadState.0 {
                     if currentReadState.count == namespaceAndReadState.1.count {
@@ -424,6 +435,41 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
     return verifiedState
 }
 
+/// Yougram: sends the read state Ghost Mode held in `peerId` (Read on Interact), then forgets the hold unless this
+/// device read further meanwhile. Does nothing for a chat with no held read. It leaves the synchronizer's queued
+/// operation alone, so it runs beside it like any push.
+func yougramPushHeldReadState(postbox: Postbox, network: Network, stateManager: AccountStateManager, peerId: PeerId) -> Signal<Never, NoError> {
+    let heldReadState = postbox.transaction { transaction -> PeerReadState? in
+        guard peerKeepsReadState(transaction.getPeer(peerId)), yougramGhostReadIsHeld(transaction: transaction, peerId: peerId) else {
+            return nil
+        }
+        if let readStates = transaction.getPeerReadStates(peerId) {
+            for (namespace, readState) in readStates {
+                if namespace == Namespaces.Message.Cloud || namespace == Namespaces.Message.SecretIncoming {
+                    return readState
+                }
+            }
+        }
+        return nil
+    }
+    return heldReadState
+    |> mapToSignal { readState -> Signal<Never, NoError> in
+        guard let readState else {
+            return .complete()
+        }
+        return pushPeerReadState(network: network, postbox: postbox, stateManager: stateManager, peerId: peerId, readState: readState)
+        |> `catch` { _ -> Signal<PeerReadState, NoError> in
+            return .complete()
+        }
+        |> mapToSignal { pushedState -> Signal<Never, NoError> in
+            return postbox.transaction { transaction -> Void in
+                yougramReleaseGhostReadIfCaughtUp(transaction: transaction, peerId: peerId, pushedState: pushedState)
+            }
+            |> ignoreValues
+        }
+    }
+}
+
 func synchronizePeerReadState(network: Network, postbox: Postbox, stateManager: AccountStateManager, peerId: PeerId, push: Bool, validate: Bool) -> Signal<Never, PeerReadStateValidationError> {
     // A channel the account is not a member of has no read state on the server
     // (NonMemberChannelReadState.swift): nothing is pushed or validated, and the queued operation
@@ -443,8 +489,15 @@ func synchronizePeerReadState(network: Network, postbox: Postbox, stateManager: 
         }
         var signal: Signal<Never, PeerReadStateValidationError> = .complete()
         if push {
-            signal = signal
-            |> then(pushPeerReadState(network: network, postbox: postbox, stateManager: stateManager, peerId: peerId, willValidate: validate))
+            if YougramCoreOptions.ghostMode.hideReadReceipts {
+                // Yougram: Ghost Mode keeps the read on this device and sends no read receipt
+                // (`YougramGhostHeldReads`).
+                signal = signal
+                |> then(yougramHoldGhostReadInsteadOfPush(postbox: postbox, peerId: peerId, confirm: !validate))
+            } else {
+                signal = signal
+                |> then(pushPeerReadState(network: network, postbox: postbox, stateManager: stateManager, peerId: peerId, willValidate: validate))
+            }
         }
         if validate {
             signal = signal

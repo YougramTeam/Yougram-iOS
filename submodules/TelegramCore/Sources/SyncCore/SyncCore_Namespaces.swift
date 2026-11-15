@@ -355,6 +355,8 @@ private enum PreferencesKeyValues: Int32 {
     case communitiesState = 50
     case unreadCounterTagsState = 51
     case stateSyncDebugSettings = 52
+    // Yougram: far above upstream's keys, so a key Telegram adds can't collide.
+    case yougramGhostHeldReads = 900
 }
 
 public func applicationSpecificPreferencesKey(_ value: Int32) -> ValueBoxKey {
@@ -642,6 +644,13 @@ public struct PreferencesKeys {
         return key
     }
     
+    /// Yougram: the chats whose read state Ghost Mode kept on this device (`YougramGhostHeldReads`).
+    static let yougramGhostHeldReads: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.yougramGhostHeldReads.rawValue)
+        return key
+    }()
+
     /// `StateSyncDebugSettings`: Debug Settings for state sync, honoured only in DEBUG builds.
     public static let stateSyncDebugSettings: ValueBoxKey = {
         let key = ValueBoxKey(length: 4)

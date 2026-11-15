@@ -19,6 +19,9 @@ import TooltipUI
 import ChatEntityKeyboardInputNode
 import notify
 import TelegramNotices
+import TelegramPresentationData
+import PresentationDataUtils
+import TelegramUIPreferences
 
 func hasFirstResponder(_ view: UIView) -> Bool {
     if view.isFirstResponder {
@@ -442,7 +445,17 @@ private final class StoryContainerScreenComponent: Component {
         private let interactionGuide = ComponentView<Empty>()
         private var isDisplayingInteractionGuide: Bool = false
         private var displayInteractionGuideDisposable: Disposable?
-        
+
+        /// Yougram: Ghost Mode's "Ask Before Opening Stories". While it asks, the story is paused and nothing is
+        /// marked seen; the stories it would have marked wait in `yougramDeferredSeenIds`.
+        private enum YougramGhostStoryWarning {
+            case notNeeded
+            case pending
+            case displaying
+        }
+        private var yougramGhostStoryWarning: YougramGhostStoryWarning = .notNeeded
+        private var yougramDeferredSeenIds: [EngineStoryId] = []
+
         private var previousSeekTime: Double?
         private var initialSeekTimestamp: Double?
         
@@ -1327,6 +1340,96 @@ private final class StoryContainerScreenComponent: Component {
             self.navigate(direction: direction)
         }
         
+        /// Yougram: whether Ghost Mode's warning keeps this story from being marked seen for now. The first story of
+        /// someone else's asks; the user's own stories never do.
+        private func yougramGhostStoryWarningHolds(id: EngineStoryId) -> Bool {
+            guard let component = self.component else {
+                return false
+            }
+            switch self.yougramGhostStoryWarning {
+            case .notNeeded:
+                return false
+            case .displaying:
+                self.yougramDeferredSeenIds.append(id)
+                return true
+            case .pending:
+                if id.peerId == component.context.account.peerId {
+                    return false
+                }
+                if YougramSettings.current.ghostCoreOptions.hideStoryViews {
+                    self.yougramGhostStoryWarning = .notNeeded
+                    return false
+                }
+                self.yougramGhostStoryWarning = .displaying
+                self.yougramDeferredSeenIds.append(id)
+                // Not from inside a layout pass, which may be what asked.
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentYougramGhostStoryWarning()
+                }
+                return true
+            }
+        }
+
+        private func presentYougramGhostStoryWarning() {
+            guard let component = self.component, let controller = self.environment?.controller() else {
+                self.resolveYougramGhostStoryWarning(dismiss: false)
+                return
+            }
+            // Pauses the story while the alert is up.
+            self.state?.updated(transition: .immediate)
+
+            let context = component.context
+            let strings = context.sharedContext.currentPresentationData.with({ $0 }).strings
+            let alert = textAlertController(
+                context: context,
+                forceTheme: defaultDarkColorPresentationTheme,
+                title: strings.Yougram_Ghost_StoryAlertTitle,
+                text: strings.Yougram_Ghost_StoryAlertText,
+                actions: [
+                    TextAlertAction(type: .defaultAction, title: strings.Yougram_Ghost_StoryAlertEnable, action: { [weak self] in
+                        // The stories waiting are marked once the setting has reached TelegramCore, so on this
+                        // device only.
+                        let _ = (updateYougramSettingsInteractively(accountManager: context.sharedContext.accountManager, { settings in
+                            var settings = settings
+                            settings.ghostModeEnabled = true
+                            settings.ghostHideStoryViews = true
+                            return settings
+                        })
+                        |> deliverOnMainQueue).start(completed: {
+                            self?.resolveYougramGhostStoryWarning(dismiss: false)
+                        })
+                    }),
+                    TextAlertAction(type: .genericAction, title: strings.Yougram_Ghost_StoryAlertView, action: { [weak self] in
+                        self?.resolveYougramGhostStoryWarning(dismiss: false)
+                    }),
+                    TextAlertAction(type: .genericAction, title: strings.Common_Cancel, action: { [weak self] in
+                        self?.resolveYougramGhostStoryWarning(dismiss: true)
+                    })
+                ],
+                actionLayout: .vertical,
+                dismissOnOutsideTap: false
+            )
+            controller.present(alert, in: .window(.root))
+        }
+
+        /// Ends the warning: Cancel closes the stories without marking any seen; otherwise the stories that waited
+        /// are marked seen now, and playback resumes.
+        private func resolveYougramGhostStoryWarning(dismiss: Bool) {
+            self.yougramGhostStoryWarning = .notNeeded
+            let deferredSeenIds = self.yougramDeferredSeenIds
+            self.yougramDeferredSeenIds.removeAll()
+            if dismiss {
+                self.environment?.controller()?.dismiss()
+                return
+            }
+            if let component = self.component {
+                for id in deferredSeenIds {
+                    component.content.markAsSeen(id: id)
+                }
+            }
+            self.state?.updated(transition: .immediate)
+        }
+
         func presentExternalTooltip(_ tooltipScreen: UndoOverlayController) {
             guard let stateValue = self.stateValue, let slice = stateValue.slice, let itemSetView = self.visibleItemSetViews[slice.peer.id], let itemSetComponentView = itemSetView.view.view as? StoryItemSetContainerComponent.View else {
                 return
@@ -1356,6 +1459,11 @@ private final class StoryContainerScreenComponent: Component {
             }
             
             if self.component == nil {
+                let yougramSettings = YougramSettings.current
+                if yougramSettings.ghostStoryWarning && !yougramSettings.ghostCoreOptions.hideStoryViews {
+                    self.yougramGhostStoryWarning = .pending
+                }
+
                 self.areHeadphonesConnected = component.context.sharedContext.mediaManager.audioSession.getIsHeadsetPluggedIn()
                 var update = false
                 self.headphonesDisposable = (component.context.sharedContext.mediaManager.audioSession.headsetConnected()
@@ -1591,7 +1699,10 @@ private final class StoryContainerScreenComponent: Component {
             if self.isDisplayingInteractionGuide {
                 isProgressPaused = true
             }
-            
+            if case .displaying = self.yougramGhostStoryWarning {
+                isProgressPaused = true
+            }
+
             var contentDerivedBottomInset: CGFloat = environment.safeInsets.bottom
             
             var validIds: [AnyHashable] = []
@@ -1843,6 +1954,9 @@ private final class StoryContainerScreenComponent: Component {
                                 },
                                 markAsSeen: { [weak self] id in
                                     guard let self, let component = self.component else {
+                                        return
+                                    }
+                                    if self.yougramGhostStoryWarningHolds(id: id) {
                                         return
                                     }
                                     component.content.markAsSeen(id: id)

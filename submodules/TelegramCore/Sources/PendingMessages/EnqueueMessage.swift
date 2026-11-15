@@ -767,7 +767,7 @@ public func enqueueMessages(account: Account, peerId: PeerId, messages: [Enqueue
     }
     return signal
     |> mapToSignal { messages -> Signal<[MessageId?], NoError> in
-        return account.postbox.transaction { transaction -> ([MessageId?], [MessageId]) in
+        return account.postbox.transaction { transaction -> ([MessageId?], [MessageId], Int64??) in
             var resultIds = Array<MessageId?>(repeating: nil, count: messages.count)
             var ephemeralMessageIds: [MessageId] = []
             var normalMessages: [(Bool, EnqueueMessage)] = []
@@ -786,18 +786,35 @@ public func enqueueMessages(account: Account, peerId: PeerId, messages: [Enqueue
                 }
             }
 
+            // Yougram: Ghost Mode's Read on Interact answers a message sent to the chat now, not one the user
+            // scheduled; the outer optional is nil when there is none.
+            var readOnInteractThreadId: Int64??
+            if peerId != account.peerId, let message = normalMessages.first(where: { !$0.1.attributes.contains(where: { $0 is OutgoingScheduleInfoMessageAttribute }) })?.1 {
+                switch message {
+                case let .message(_, _, _, _, threadId, _, _, _, _, _):
+                    readOnInteractThreadId = .some(threadId)
+                case let .forward(_, threadId, _, _, _):
+                    readOnInteractThreadId = .some(threadId)
+                }
+            }
+
             if !normalMessages.isEmpty {
+                // Yougram: Ghost Mode can send these as scheduled messages.
+                normalMessages = yougramGhostScheduledMessages(transaction: transaction, accountPeerId: account.peerId, peerId: peerId, messages: normalMessages, now: Int32(account.network.context.globalTime()))
                 let normalIds = enqueueMessages(transaction: transaction, account: account, peerId: peerId, messages: normalMessages)
                 for i in 0 ..< min(normalIds.count, normalMessageIndices.count) {
                     resultIds[normalMessageIndices[i]] = normalIds[i]
                 }
             }
 
-            return (resultIds, ephemeralMessageIds)
+            return (resultIds, ephemeralMessageIds, readOnInteractThreadId)
         }
-        |> map { resultIds, ephemeralMessageIds -> [MessageId?] in
+        |> map { resultIds, ephemeralMessageIds, readOnInteractThreadId -> [MessageId?] in
             for messageId in ephemeralMessageIds {
                 let _ = _internal_sendEphemeralOutgoingMessage(account: account, messageId: messageId).startStandalone()
+            }
+            if let threadId = readOnInteractThreadId {
+                let _ = _internal_yougramReadOnInteract(postbox: account.postbox, network: account.network, stateManager: account.stateManager, peerId: peerId, threadId: threadId).startStandalone()
             }
             return resultIds
         }

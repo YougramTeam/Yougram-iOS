@@ -373,6 +373,11 @@ private class ReplyThreadHistoryContextImpl {
 
             strongSelf.unreadCountValue = unreadCountValue
 
+            // Yougram: Ghost Mode keeps a thread's read on this device; the counts above have already moved.
+            if YougramCoreOptions.ghostMode.hideReadReceipts {
+                return
+            }
+
             if let state = strongSelf.stateValue {
                 if let indices = state.holeIndices[messageIndex.id.namespace] {
                     let fromIdInt: Int

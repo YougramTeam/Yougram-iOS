@@ -147,6 +147,10 @@ private func requestActivity(postbox: Postbox, network: Network, accountPeerId: 
             if peerId == accountPeerId {
                 return .complete()
             }
+            // Yougram: Ghost Mode keeps this activity from the chat.
+            if let activity, yougramGhostHidesActivity(activity) {
+                return .complete()
+            }
             if let channel = peer as? TelegramChannel, case .broadcast = channel.info {
                 if let activity = activity {
                     switch activity {

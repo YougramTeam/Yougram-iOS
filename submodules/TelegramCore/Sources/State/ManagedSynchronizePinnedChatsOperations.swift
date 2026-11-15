@@ -254,7 +254,8 @@ private func synchronizePinnedChats(transaction: Transaction, postbox: Postbox, 
                 }
                 let _ = transaction.addMessages(storeMessages, location: .UpperHistoryBlock)
                 
-                transaction.resetIncomingReadStates(readStates)
+                // Yougram: a chat read in Ghost Mode keeps its read on this device.
+                transaction.resetIncomingReadStates(yougramKeepingGhostHeldReads(transaction: transaction, readStates))
                 
                 for (peerId, pts) in channelStates {
                     if let _ = transaction.getPeerChatState(peerId) as? ChannelState {

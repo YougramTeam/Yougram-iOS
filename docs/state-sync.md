@@ -905,6 +905,20 @@ Each: the rule; why; where enforced; what pins it.
     installs no non-member state, so it keeps the read state it had when the ban arrived; interactive reads move that
     state locally (`channelIsKeptAfterBan` in `ApplyMaxReadIndexInteractively.swift`) and `synchronizePeerReadState`
     confirms what they queue without sending it. Pinned: none.
+31. **Yougram: a read Ghost Mode held keeps this device's mark ahead of the server's, and nothing pulls it back while
+    the chat is listed as held** (`YougramCoreOptions.ghostMode.hideReadReceipts`, off in the extensions and tests;
+    `State/YougramGhostMode.swift`). With it on, `synchronizePeerReadState` replaces a push by
+    `yougramHoldGhostReadInsteadOfPush`: no request, the chat goes into the preferences entry `YougramGhostHeldReads`
+    (key 900), and the operation is confirmed (or validated, which confirms). Upstream treats a local mark ahead of a
+    server that still counts unread as a push in flight: validation answers `.retry`, which the synchronizer restarts
+    at once, so for a held chat validation instead keeps the local mark and count with the server's outgoing mark and
+    newest id. The fetches that reset read states directly (`_internal_resetAccountState`, the chat-list fill, pinned
+    chats, folder dialogs) pass through `yougramKeepingGhostHeldReads`, the rule `applyResetReadState` already follows
+    for a replayed `.ResetReadState`. The list outlives the option: a chat leaves it when a push carries its mark
+    (`yougramReleaseGhostReadIfCaughtUp`, in the push's verification and in Read on Interact's
+    `yougramPushHeldReadState`) or validation finds the server caught up. With the list empty every path is
+    upstream's. Forum-topic and monoforum reads (`readDiscussion`, `readSavedHistory`) are skipped and not held, so the
+    server's thread state can return. Pinned: none.
 
 ## Cost model
 

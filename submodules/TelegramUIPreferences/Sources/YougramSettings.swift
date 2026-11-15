@@ -19,6 +19,24 @@ public struct YougramSettings: Codable, Equatable {
     public var hideAccountNameInNotifications: Bool
     public var hideAds: Bool
 
+    // MARK: Ghost Mode
+    /// The master switch: each part below applies only while this is on (`ghostCoreOptions`).
+    public var ghostModeEnabled: Bool
+    public var ghostHideReadReceipts: Bool
+    public var ghostHideVoiceListened: Bool
+    public var ghostHideRoundWatched: Bool
+    public var ghostHideStoryViews: Bool
+    public var ghostHideOnline: Bool
+    public var ghostHideTyping: Bool
+    public var ghostHideUploading: Bool
+    public var ghostHideChoosingSticker: Bool
+    public var ghostHideOtherActivities: Bool
+    public var ghostAutoOffline: Bool
+    public var ghostReadOnInteract: Bool
+    public var ghostSendAsScheduled: Bool
+    /// Opening someone's story while Ghost Mode doesn't hide story views asks first.
+    public var ghostStoryWarning: Bool
+
     // MARK: Passcode
     /// The lock screen's digit keys change places every time it appears.
     public var scramblePasscodeKeypad: Bool
@@ -76,6 +94,20 @@ public struct YougramSettings: Codable, Equatable {
             hidePhoneInSettings: false,
             hideAccountNameInNotifications: false,
             hideAds: true,
+            ghostModeEnabled: false,
+            ghostHideReadReceipts: true,
+            ghostHideVoiceListened: true,
+            ghostHideRoundWatched: true,
+            ghostHideStoryViews: true,
+            ghostHideOnline: true,
+            ghostHideTyping: true,
+            ghostHideUploading: true,
+            ghostHideChoosingSticker: true,
+            ghostHideOtherActivities: true,
+            ghostAutoOffline: false,
+            ghostReadOnInteract: true,
+            ghostSendAsScheduled: false,
+            ghostStoryWarning: false,
             scramblePasscodeKeypad: false,
             duressDeleteBackup: true,
             duressTerminateSessions: false,
@@ -113,6 +145,20 @@ public struct YougramSettings: Codable, Equatable {
         hidePhoneInSettings: Bool,
         hideAccountNameInNotifications: Bool,
         hideAds: Bool,
+        ghostModeEnabled: Bool,
+        ghostHideReadReceipts: Bool,
+        ghostHideVoiceListened: Bool,
+        ghostHideRoundWatched: Bool,
+        ghostHideStoryViews: Bool,
+        ghostHideOnline: Bool,
+        ghostHideTyping: Bool,
+        ghostHideUploading: Bool,
+        ghostHideChoosingSticker: Bool,
+        ghostHideOtherActivities: Bool,
+        ghostAutoOffline: Bool,
+        ghostReadOnInteract: Bool,
+        ghostSendAsScheduled: Bool,
+        ghostStoryWarning: Bool,
         scramblePasscodeKeypad: Bool,
         duressDeleteBackup: Bool,
         duressTerminateSessions: Bool,
@@ -147,6 +193,20 @@ public struct YougramSettings: Codable, Equatable {
         self.hidePhoneInSettings = hidePhoneInSettings
         self.hideAccountNameInNotifications = hideAccountNameInNotifications
         self.hideAds = hideAds
+        self.ghostModeEnabled = ghostModeEnabled
+        self.ghostHideReadReceipts = ghostHideReadReceipts
+        self.ghostHideVoiceListened = ghostHideVoiceListened
+        self.ghostHideRoundWatched = ghostHideRoundWatched
+        self.ghostHideStoryViews = ghostHideStoryViews
+        self.ghostHideOnline = ghostHideOnline
+        self.ghostHideTyping = ghostHideTyping
+        self.ghostHideUploading = ghostHideUploading
+        self.ghostHideChoosingSticker = ghostHideChoosingSticker
+        self.ghostHideOtherActivities = ghostHideOtherActivities
+        self.ghostAutoOffline = ghostAutoOffline
+        self.ghostReadOnInteract = ghostReadOnInteract
+        self.ghostSendAsScheduled = ghostSendAsScheduled
+        self.ghostStoryWarning = ghostStoryWarning
         self.scramblePasscodeKeypad = scramblePasscodeKeypad
         self.duressDeleteBackup = duressDeleteBackup
         self.duressTerminateSessions = duressTerminateSessions
@@ -181,6 +241,9 @@ public struct YougramSettings: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case hidePhoneInSettings, hideAccountNameInNotifications, hideAds, autoBackupAccounts
+        case ghostModeEnabled, ghostHideReadReceipts, ghostHideVoiceListened, ghostHideRoundWatched, ghostHideStoryViews
+        case ghostHideOnline, ghostHideTyping, ghostHideUploading, ghostHideChoosingSticker, ghostHideOtherActivities
+        case ghostAutoOffline, ghostReadOnInteract, ghostSendAsScheduled, ghostStoryWarning
         case scramblePasscodeKeypad, duressDeleteBackup, duressTerminateSessions
         case quickFormattingPanel, localVoiceTranscription, sendHDPhotos, hdPhotosFromClipboard, hideReactions
         case standardEmojiFirst, disableRecordingHints, disableAutoNextTopic, discussionGroupButton, hiddenContextMenuActions
@@ -201,6 +264,20 @@ public struct YougramSettings: Codable, Equatable {
         self.hidePhoneInSettings = bool(.hidePhoneInSettings, d.hidePhoneInSettings)
         self.hideAccountNameInNotifications = bool(.hideAccountNameInNotifications, d.hideAccountNameInNotifications)
         self.hideAds = bool(.hideAds, d.hideAds)
+        self.ghostModeEnabled = bool(.ghostModeEnabled, d.ghostModeEnabled)
+        self.ghostHideReadReceipts = bool(.ghostHideReadReceipts, d.ghostHideReadReceipts)
+        self.ghostHideVoiceListened = bool(.ghostHideVoiceListened, d.ghostHideVoiceListened)
+        self.ghostHideRoundWatched = bool(.ghostHideRoundWatched, d.ghostHideRoundWatched)
+        self.ghostHideStoryViews = bool(.ghostHideStoryViews, d.ghostHideStoryViews)
+        self.ghostHideOnline = bool(.ghostHideOnline, d.ghostHideOnline)
+        self.ghostHideTyping = bool(.ghostHideTyping, d.ghostHideTyping)
+        self.ghostHideUploading = bool(.ghostHideUploading, d.ghostHideUploading)
+        self.ghostHideChoosingSticker = bool(.ghostHideChoosingSticker, d.ghostHideChoosingSticker)
+        self.ghostHideOtherActivities = bool(.ghostHideOtherActivities, d.ghostHideOtherActivities)
+        self.ghostAutoOffline = bool(.ghostAutoOffline, d.ghostAutoOffline)
+        self.ghostReadOnInteract = bool(.ghostReadOnInteract, d.ghostReadOnInteract)
+        self.ghostSendAsScheduled = bool(.ghostSendAsScheduled, d.ghostSendAsScheduled)
+        self.ghostStoryWarning = bool(.ghostStoryWarning, d.ghostStoryWarning)
         self.scramblePasscodeKeypad = bool(.scramblePasscodeKeypad, d.scramblePasscodeKeypad)
         self.duressDeleteBackup = bool(.duressDeleteBackup, d.duressDeleteBackup)
         self.duressTerminateSessions = bool(.duressTerminateSessions, d.duressTerminateSessions)
@@ -238,6 +315,20 @@ public struct YougramSettings: Codable, Equatable {
         try c.encode(self.hidePhoneInSettings, forKey: .hidePhoneInSettings)
         try c.encode(self.hideAccountNameInNotifications, forKey: .hideAccountNameInNotifications)
         try c.encode(self.hideAds, forKey: .hideAds)
+        try c.encode(self.ghostModeEnabled, forKey: .ghostModeEnabled)
+        try c.encode(self.ghostHideReadReceipts, forKey: .ghostHideReadReceipts)
+        try c.encode(self.ghostHideVoiceListened, forKey: .ghostHideVoiceListened)
+        try c.encode(self.ghostHideRoundWatched, forKey: .ghostHideRoundWatched)
+        try c.encode(self.ghostHideStoryViews, forKey: .ghostHideStoryViews)
+        try c.encode(self.ghostHideOnline, forKey: .ghostHideOnline)
+        try c.encode(self.ghostHideTyping, forKey: .ghostHideTyping)
+        try c.encode(self.ghostHideUploading, forKey: .ghostHideUploading)
+        try c.encode(self.ghostHideChoosingSticker, forKey: .ghostHideChoosingSticker)
+        try c.encode(self.ghostHideOtherActivities, forKey: .ghostHideOtherActivities)
+        try c.encode(self.ghostAutoOffline, forKey: .ghostAutoOffline)
+        try c.encode(self.ghostReadOnInteract, forKey: .ghostReadOnInteract)
+        try c.encode(self.ghostSendAsScheduled, forKey: .ghostSendAsScheduled)
+        try c.encode(self.ghostStoryWarning, forKey: .ghostStoryWarning)
         try c.encode(self.scramblePasscodeKeypad, forKey: .scramblePasscodeKeypad)
         try c.encode(self.duressDeleteBackup, forKey: .duressDeleteBackup)
         try c.encode(self.duressTerminateSessions, forKey: .duressTerminateSessions)
@@ -274,6 +365,27 @@ public struct YougramSettings: Codable, Equatable {
         return self.hiddenContextMenuActions.contains(action)
     }
 
+    /// What TelegramCore's Ghost Mode follows: each part, while the master switch is on.
+    public var ghostCoreOptions: YougramCoreOptions.GhostMode {
+        var options = YougramCoreOptions.GhostMode()
+        guard self.ghostModeEnabled else {
+            return options
+        }
+        options.hideReadReceipts = self.ghostHideReadReceipts
+        options.hideVoiceListened = self.ghostHideVoiceListened
+        options.hideRoundWatched = self.ghostHideRoundWatched
+        options.hideStoryViews = self.ghostHideStoryViews
+        options.hideOnline = self.ghostHideOnline
+        options.hideTyping = self.ghostHideTyping
+        options.hideUploading = self.ghostHideUploading
+        options.hideChoosingSticker = self.ghostHideChoosingSticker
+        options.hideOtherActivities = self.ghostHideOtherActivities
+        options.autoOffline = self.ghostAutoOffline
+        options.readOnInteract = self.ghostReadOnInteract
+        options.sendAsScheduled = self.ghostSendAsScheduled
+        return options
+    }
+
     // MARK: Synchronous access
 
     private static let lock = NSLock()
@@ -291,6 +403,7 @@ public struct YougramSettings: Codable, Equatable {
     /// `SharedAccountContextImpl.init` reads `current` before it loads the accounts.
     private static func applyCoreOptions(_ value: YougramSettings) {
         YougramCoreOptions.keepChatsAfterRemoval = value.keepChatsAfterBan
+        YougramCoreOptions.ghostMode = value.ghostCoreOptions
     }
     private static let updatesPipe = ValuePipe<YougramSettings>()
 

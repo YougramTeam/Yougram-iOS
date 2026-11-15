@@ -115,8 +115,9 @@ func _internal_resetAccountState(postbox: Postbox, network: Network, accountPeer
                 let deletedIds = deleteStoredMessagesAsReceivedDeletion(transaction: transaction, mediaBox: postbox.mediaBox, ids: ghostTail)
                 Logger.shared.log("State", "account reset: deleted \(deletedIds.count) stored message(s) above the fetched top messages")
             }
-            transaction.resetIncomingReadStates(fetchedChats.readStates)
-            
+            // Yougram: a chat read in Ghost Mode keeps its read on this device.
+            transaction.resetIncomingReadStates(yougramKeepingGhostHeldReads(transaction: transaction, fetchedChats.readStates))
+
             for (peerId, autoremoveValue) in fetchedChats.ttlPeriods {
                 transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, current in
                     if peerId.namespace == Namespaces.Peer.CloudUser {

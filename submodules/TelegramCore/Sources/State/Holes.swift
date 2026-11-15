@@ -1601,8 +1601,9 @@ func fetchChatListHole(postbox: Postbox, network: Network, accountPeerId: PeerId
             if !lowestAboveTop.isEmpty {
                 Logger.shared.log("State", "chat list hole fill: stored messages above the top of \(lowestAboveTop.keys.sorted()) left under a hole for their next history fill")
             }
-            transaction.resetIncomingReadStates(fetchedChats.readStates)
-            
+            // Yougram: a chat read in Ghost Mode keeps its read on this device.
+            transaction.resetIncomingReadStates(yougramKeepingGhostHeldReads(transaction: transaction, fetchedChats.readStates))
+
             for (peerId, autoremoveValue) in fetchedChats.ttlPeriods {
                 transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, current in
                     if peerId.namespace == Namespaces.Peer.CloudUser {

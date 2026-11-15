@@ -2116,13 +2116,18 @@ func _internal_markStoryAsSeen(account: Account, peerId: PeerId, id: Int32, asPi
             guard let inputPeer = inputPeer else {
                 return .complete()
             }
-            
+
             #if DEBUG && false
             if "".isEmpty {
                 return .complete()
             }
             #endif
-            
+
+            // Yougram: Ghost Mode counts no view.
+            if YougramCoreOptions.ghostMode.hideStoryViews {
+                return .complete()
+            }
+
             return account.network.request(Api.functions.stories.incrementStoryViews(peer: inputPeer, id: [id]))
             |> `catch` { _ -> Signal<Api.Bool, NoError> in
                 return .single(.boolFalse)
@@ -2139,7 +2144,10 @@ func _internal_markStoryAsSeen(account: Account, peerId: PeerId, id: Int32, asPi
             
             #if DEBUG && false
             #else
-            _internal_addSynchronizeViewStoriesOperation(peerId: peerId, storyId: id, transaction: transaction)
+            // Yougram: Ghost Mode marks the story seen on this device only.
+            if !YougramCoreOptions.ghostMode.hideStoryViews {
+                _internal_addSynchronizeViewStoriesOperation(peerId: peerId, storyId: id, transaction: transaction)
+            }
             #endif
             
             return transaction.getPeer(peerId).flatMap(apiInputUser)
