@@ -483,3 +483,9 @@ This repo includes a tgcalls testbench (CLI tool, Go/Pion SFU, Docker build) lay
 Build the test binary from this directory with:
 
 `./build-input/bazel-9.2.0-darwin-arm64 build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli`
+
+## Yougram
+
+Yougram's own guide (what is built, where, how to add a feature, what was decided against):
+
+@YOUGRAM.md
