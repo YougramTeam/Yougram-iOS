@@ -1843,7 +1843,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                     }
                 },
                 onWipedAndReset: { [weak self] in
-                    guard let self else { return }
+                    guard self != nil else { return }
                     dismissUnlockGate()
                     let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
                     let standardParameters = ValueBoxEncryptionParameters(
@@ -1871,7 +1871,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 preferredStyle: .alert
             )
             recoveryController.addAction(UIAlertAction(title: "Erase All Data", style: .destructive, handler: { [weak self] _ in
-                guard let self else { return }
+                guard self != nil else { return }
                 YougramVaultStore.shared.cryptoShredAndWipeAllData(rootPath: rootPath, appGroupPath: appGroupUrl.path)
                 try? resetWalletLocalSecrets()
                 YougramLocalEncryptionCoordinator.purgeSystemCachesAndIndexes()
@@ -1885,8 +1885,12 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 continueLaunch(standardParameters)
             }))
             window.makeKeyAndVisible()
-            DispatchQueue.main.async {
-                window.rootViewController?.present(recoveryController, animated: true, completion: nil)
+            if window.windowScene != nil {
+                DispatchQueue.main.async {
+                    window.rootViewController?.present(recoveryController, animated: true, completion: nil)
+                }
+            } else {
+                self.pendingLaunchAlert = recoveryController
             }
         } else if let initialEncryptionParameters {
             continueLaunch(initialEncryptionParameters)

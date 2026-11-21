@@ -1094,7 +1094,8 @@ public final class YougramVaultStore: @unchecked Sendable {
         guard key.count == 32 else {
             throw YougramVaultError.corrupted
         }
-        let nonce = try AES.GCM.Nonce(data: try Self.randomBytes(12))
+        let nonceData = try Self.randomBytes(12)
+        let nonce = try AES.GCM.Nonce(data: nonceData)
         guard let combined = try AES.GCM.seal(plaintext, using: SymmetricKey(data: key), nonce: nonce, authenticating: Data(aad.utf8)).combined else {
             throw YougramVaultError.corrupted
         }

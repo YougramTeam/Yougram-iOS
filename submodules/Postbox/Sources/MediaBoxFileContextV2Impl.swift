@@ -112,7 +112,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
         private let fullPath: String
         private let metaPath: String
         
-        private let destinationFile: MediaBoxFileManager.Item?
+        private var destinationFile: MediaBoxFileManager.Item?
         
         private let fileMap: MediaBoxFileMap
         private var rangeRequests = Bag<RangeRequest>()

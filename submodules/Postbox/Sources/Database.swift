@@ -71,7 +71,7 @@ public final class Database {
         if location != ":memory:" {
             let guardFd = Darwin.open(location + "-guard", O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)
             if guardFd >= 0 {
-                close(guardFd)
+                Darwin.close(guardFd)
             }
         }
         let flags: Int32

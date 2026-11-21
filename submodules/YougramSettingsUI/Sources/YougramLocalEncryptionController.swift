@@ -11,7 +11,6 @@ import AccountContext
 import UndoUI
 import PasscodeCore
 import PasscodeUI
-import LocalAuthentication
 
 private final class YougramSettingsPasscodeHolder {
     let session: PasscodeSession
@@ -438,18 +437,18 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
                             }
                             chooseExtensionsMode { allowExtensions in
                                 promptAppPasscodeSession { session in
-                                    let holder = YougramSettingsPasscodeHolder(session)
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
                                             let prepared = try YougramVaultStore.shared.prepareAppPasscodeVault(
-                                                session: holder.session,
+                                                session: session,
                                                 allowBackgroundExtensions: allowExtensions,
                                                 scrambledKeypad: YougramSettings.current.scramblePasscodeKeypad
                                             )
                                             DispatchQueue.main.async {
-                                                startEnableMigration(prepared.masterKey, prepared.manifest, holder.session)
+                                                startEnableMigration(prepared.masterKey, prepared.manifest, session)
                                             }
                                         } catch {
+                                            session.invalidate()
                                             DispatchQueue.main.async {
                                                 showAlert(nil, strings.Yougram_Encryption_MigrationFailed)
                                             }
@@ -624,10 +623,10 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
                                     }
                                 case .appPasscode:
                                     promptAppPasscodeSession { session in
-                                        let holder = YougramSettingsPasscodeHolder(session)
-                                        if let masterKey = try? YougramVaultStore.shared.unlockWithAppPasscodeSession(holder.session, rootPath: rootPath) {
-                                            startDisableMigration(masterKey, manifest, holder.session)
+                                        if let masterKey = try? YougramVaultStore.shared.unlockWithAppPasscodeSession(session, rootPath: rootPath) {
+                                            startDisableMigration(masterKey, manifest, session)
                                         } else {
+                                            session.invalidate()
                                             showAlert(nil, strings.Yougram_Encryption_InvalidSecret)
                                         }
                                     }
