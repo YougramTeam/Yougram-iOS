@@ -1,3 +1,4 @@
+import Foundation
 import TelegramCore
 #if os(macOS)
 import PasscodeCore
