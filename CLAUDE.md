@@ -148,7 +148,7 @@ a green build: [`AGENTS.md`](AGENTS.md), "Visual features and animations" (`simc
 
 ### Yougram's identity and its CI build
 
-Yougram's bundle id (`com.yougramteam.yougram`) lives in `build-system/yougram-configuration.json`, which the
+Yougram's bundle id (`app.yougram.tg`) lives in `build-system/yougram-configuration.json`, which the
 GitHub Actions workflow (`.github/workflows/build-ipa.yml`, manual only) builds with. Its placeholder signing profiles
 are `build-system/yougram-codesigning/profiles`, generated from `build-system/fake-codesigning` by
 `build-system/yougram-codesigning/generate_profiles.py`: **rerun it after changing the bundle id**, or Make.py finds

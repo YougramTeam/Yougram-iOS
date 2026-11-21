@@ -310,7 +310,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             return existingSession
         }
         
-        let baseAppBundleId = Bundle.main.bundleIdentifier ?? "com.yougramteam.yougram"
+        let baseAppBundleId = Bundle.main.bundleIdentifier ?? "app.yougram.tg"
         let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
         if let appGroupName = self.resolvedAppGroupIdentifier ?? BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) {
             configuration.sharedContainerIdentifier = appGroupName
@@ -566,7 +566,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
         
-        let baseAppBundleId = Bundle.main.bundleIdentifier ?? "com.yougramteam.yougram"
+        let baseAppBundleId = Bundle.main.bundleIdentifier ?? "app.yougram.tg"
         let resolvedAppGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId)
         self.resolvedAppGroupIdentifier = resolvedAppGroupName
         let appGroupName = resolvedAppGroupName ?? "group.\(baseAppBundleId)"

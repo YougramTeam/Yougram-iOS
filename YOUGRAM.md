@@ -20,7 +20,7 @@ lives, and how to add more. It is imported at the end of `CLAUDE.md`, so it load
   `alternate_icon_folders` in `Telegram/BUILD` (`Telegram-iOS/<name>.alticon/`) and
   `getAvailableAlternateIcons` in `AppDelegate.swift`: Purple (default), Aqua, Sunset, Holo, Pixel, PremiumTurbo,
   PremiumBlack. Turbo and Black don't need Premium (`ThemeSettingsAppIconItem.swift`).
-- **Bundle id `com.yougramteam.yougram`** and signing: `CLAUDE.md`, "Yougram's identity and its CI build".
+- **Bundle id `app.yougram.tg`** and signing: `CLAUDE.md`, "Yougram's identity and its CI build".
 - **GitHub Actions** (all manual, `gh workflow run … -R YougramTeam/Yougram-iOS`):
   - `build-ipa.yml`: inputs `configuration` (release_arm64/debug_arm64), `use_cache`, `runner` (xcode-27, the only
     standard image with Xcode 27), `build_minutes`, `signing` (testflight/placeholder). The Bazel disk cache is saved
