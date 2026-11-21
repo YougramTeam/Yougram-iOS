@@ -903,6 +903,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
     private var backgroundFrameTransition: (CGRect, CGRect)?
     
     private var currentSwipeToReplyTranslation: CGFloat = 0.0
+    private var yougramFadedContentNodes: Set<ObjectIdentifier> = []
     
     private var appliedItem: ChatMessageItem?
     private var appliedForwardInfo: ChatMessageAppliedForwardInfo?
@@ -1177,7 +1178,9 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                     break
                 default:
                     node.layer.removeAllAnimations()
-                    node.layer.allowsGroupOpacity = false
+                    if node.layer.opacity >= 0.999 {
+                        node.layer.allowsGroupOpacity = false
+                    }
                     return
                 }
             }
@@ -1205,7 +1208,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
     override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         super.animateInsertion(currentTimestamp, duration: duration, options: options)
         
-        self.shadowNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+        self.shadowNode.layer.animateAlpha(from: 0.0, to: CGFloat(self.shadowNode.layer.opacity), duration: 0.2)
         
         func process(node: ASDisplayNode) {
             if node === self.accessoryItemNode {
@@ -1218,8 +1221,10 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                     break
                 default:
                     node.layer.allowsGroupOpacity = true
-                    node.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, completion: { [weak node] _ in
-                        node?.layer.allowsGroupOpacity = false
+                    node.layer.animateAlpha(from: 0.0, to: CGFloat(node.layer.opacity), duration: 0.2, completion: { [weak node] _ in
+                        if let node, node.layer.opacity >= 0.999 {
+                            node.layer.allowsGroupOpacity = false
+                        }
                     })
                     return
                 }
@@ -1256,10 +1261,39 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
             for subnode in subnodes {
                 let layer = subnode.layer
                 layer.allowsGroupOpacity = true
-                layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, completion: { [weak layer] _ in
-                    layer?.allowsGroupOpacity = false
+                layer.animateAlpha(from: 0.0, to: CGFloat(layer.opacity), duration: 0.2, completion: { [weak layer] _ in
+                    if let layer, layer.opacity >= 0.999 {
+                        layer.allowsGroupOpacity = false
+                    }
                 })
             }
+        }
+    }
+    
+    override public func reuse() {
+        super.reuse()
+        
+        yougramResetDeletedOpacity(node: self.mainContainerNode)
+        yougramResetDeletedOpacity(node: self.shadowNode)
+        if let shareButtonNode = self.shareButtonNode {
+            yougramResetDeletedOpacity(node: shareButtonNode)
+        }
+        if let summarizeButtonNode = self.summarizeButtonNode {
+            yougramResetDeletedOpacity(node: summarizeButtonNode)
+        }
+        if let actionButtonsNode = self.actionButtonsNode {
+            yougramResetDeletedOpacity(node: actionButtonsNode)
+        }
+        if let reactionButtonsNode = self.reactionButtonsNode {
+            yougramResetDeletedOpacity(node: reactionButtonsNode)
+        }
+        if !self.yougramFadedContentNodes.isEmpty {
+            for contentNode in self.contentNodes {
+                if self.yougramFadedContentNodes.contains(ObjectIdentifier(contentNode)) {
+                    yougramResetDeletedOpacity(node: contentNode)
+                }
+            }
+            self.yougramFadedContentNodes.removeAll()
         }
     }
     
@@ -6540,6 +6574,49 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
         }
         
         strongSelf.updateSearchTextHighlightState()
+        
+        let wholeBubbleDeleted: Bool
+        let hasPartialGroupDeletion: Bool
+        switch item.content {
+        case let .message(message, _, _, _, _):
+            wholeBubbleDeleted = message.isYougramDeleted
+            hasPartialGroupDeletion = false
+        case let .group(messages):
+            let deletedCount = messages.reduce(0) { $0 + ($1.0.isYougramDeleted ? 1 : 0) }
+            wholeBubbleDeleted = !messages.isEmpty && deletedCount == messages.count
+            hasPartialGroupDeletion = deletedCount > 0 && !wholeBubbleDeleted
+        }
+        yougramUpdateDeletedOpacity(node: strongSelf.mainContainerNode, isDeleted: wholeBubbleDeleted, animation: animation)
+        yougramUpdateDeletedOpacity(node: strongSelf.shadowNode, isDeleted: wholeBubbleDeleted, animation: animation)
+        if let shareButtonNode = strongSelf.shareButtonNode {
+            yougramUpdateDeletedOpacity(node: shareButtonNode, isDeleted: wholeBubbleDeleted, animation: animation)
+        }
+        if let summarizeButtonNode = strongSelf.summarizeButtonNode {
+            yougramUpdateDeletedOpacity(node: summarizeButtonNode, isDeleted: wholeBubbleDeleted, animation: animation)
+        }
+        if let actionButtonsNode = strongSelf.actionButtonsNode {
+            yougramUpdateDeletedOpacity(node: actionButtonsNode, isDeleted: wholeBubbleDeleted, animation: animation)
+        }
+        if let reactionButtonsNode = strongSelf.reactionButtonsNode {
+            yougramUpdateDeletedOpacity(node: reactionButtonsNode, isDeleted: wholeBubbleDeleted, animation: animation)
+        }
+        for contentNode in strongSelf.contentNodes {
+            let contentDeleted: Bool
+            if wholeBubbleDeleted {
+                contentDeleted = contentNode.supernode === strongSelf
+            } else if hasPartialGroupDeletion {
+                contentDeleted = contentNode.item?.message.isYougramDeleted == true
+            } else {
+                contentDeleted = false
+            }
+            let identifier = ObjectIdentifier(contentNode)
+            if contentDeleted {
+                strongSelf.yougramFadedContentNodes.insert(identifier)
+                yougramUpdateDeletedOpacity(node: contentNode, isDeleted: true, animation: animation)
+            } else if strongSelf.yougramFadedContentNodes.remove(identifier) != nil {
+                yougramUpdateDeletedOpacity(node: contentNode, isDeleted: false, animation: animation)
+            }
+        }
         
         strongSelf.updateVisibility(isScroll: false)
         

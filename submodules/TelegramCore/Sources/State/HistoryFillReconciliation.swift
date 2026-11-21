@@ -262,7 +262,14 @@ func historyFillReconciliation(transaction: Transaction, peer: Peer, peerInput: 
         storedIds = []
     }
     let candidates = storedIds.filter { id in
-        return id.peerId == peer.id && id.namespace == namespace && filledRange.contains(id.id) && !answerIds.contains(id)
+        guard id.peerId == peer.id && id.namespace == namespace && filledRange.contains(id.id) && !answerIds.contains(id) else {
+            return false
+        }
+        // Yougram: preserved deleted messages stay in Postbox; don't re-reconcile them with the server.
+        if let message = transaction.getMessage(id), message.isYougramDeleted {
+            return false
+        }
+        return true
     }
     if candidates.isEmpty {
         return nil

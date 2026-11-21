@@ -1596,6 +1596,18 @@ public class ChatMessageStickerItemNode: ChatMessageItemView {
                         f()
                     }
                     
+                    let isYougramDeleted = item.message.isYougramDeleted
+                    yougramUpdateDeletedOpacity(node: strongSelf.containerNode, isDeleted: isYougramDeleted, animation: animation)
+                    if let shareButtonNode = strongSelf.shareButtonNode {
+                        yougramUpdateDeletedOpacity(node: shareButtonNode, isDeleted: isYougramDeleted, animation: animation)
+                    }
+                    if let actionButtonsNode = strongSelf.actionButtonsNode {
+                        yougramUpdateDeletedOpacity(node: actionButtonsNode, isDeleted: isYougramDeleted, animation: animation)
+                    }
+                    if let reactionButtonsNode = strongSelf.reactionButtonsNode {
+                        yougramUpdateDeletedOpacity(node: reactionButtonsNode, isDeleted: isYougramDeleted, animation: animation)
+                    }
+                    
                     strongSelf.updateVisibility()
                 }
             }
@@ -2086,6 +2098,21 @@ public class ChatMessageStickerItemNode: ChatMessageItemView {
         super.animateAdded(currentTimestamp, duration: duration)
         
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+    }
+    
+    override public func reuse() {
+        super.reuse()
+        
+        yougramResetDeletedOpacity(node: self.containerNode)
+        if let shareButtonNode = self.shareButtonNode {
+            yougramResetDeletedOpacity(node: shareButtonNode)
+        }
+        if let actionButtonsNode = self.actionButtonsNode {
+            yougramResetDeletedOpacity(node: actionButtonsNode)
+        }
+        if let reactionButtonsNode = self.reactionButtonsNode {
+            yougramResetDeletedOpacity(node: reactionButtonsNode)
+        }
     }
     
     override public func getMessageContextSourceNode(stableId: UInt32?) -> ContextExtractedContentContainingNode? {

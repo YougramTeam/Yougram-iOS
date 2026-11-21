@@ -131,6 +131,10 @@ func deleteMessagesInteractively(transaction: Transaction, stateManager: Account
                 if id.namespace == Namespaces.Message.Local || id.namespace == Namespaces.Message.ScheduledLocal || id.namespace == Namespaces.Message.QuickReplyLocal || id.namespace == Namespaces.Message.EphemeralLocal || Namespaces.Message.allWelcomeMessages.contains(id.namespace) {
                     return false
                 }
+                // Yougram: already remotely deleted messages only need local removal.
+                if let message = transaction.getMessage(id), message.isYougramDeleted {
+                    return false
+                }
                 return true
             }
             if !remoteMessageIds.isEmpty {

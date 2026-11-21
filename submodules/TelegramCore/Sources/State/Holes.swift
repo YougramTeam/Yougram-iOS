@@ -1225,7 +1225,16 @@ func fetchMessageHistoryHole(accountPeerId: PeerId, source: FetchMessageHistoryH
                         var reopenedIds: [MessageId] = []
                         if let confirmation = confirmation, let reconciliation = reconciliation {
                             applyStoredMessageConfirmation(transaction: transaction, accountPeerId: accountPeerId, mediaBox: postbox.mediaBox, confirmation: confirmation, versions: reconciliation.versions)
-                            reopenedIds = transaction.filterStoredMessageIds(confirmation.missing).filter { closedRange.contains($0.id) }.sorted()
+                            // Yougram: preserved deleted messages stay stored on purpose; do not reopen holes over them.
+                            reopenedIds = transaction.filterStoredMessageIds(confirmation.missing).filter { id in
+                                guard closedRange.contains(id.id) else {
+                                    return false
+                                }
+                                if let message = transaction.getMessage(id), message.isYougramDeleted {
+                                    return false
+                                }
+                                return true
+                            }.sorted()
                         }
 
                         switch peerInput {

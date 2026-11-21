@@ -43,6 +43,33 @@ public enum ChatMessageItemBottomNeighbor {
     case merged(semi: Bool)
 }
 
+public let yougramDeletedMessageAlpha: CGFloat = 0.45
+
+public func yougramUpdateDeletedOpacity(node: ASDisplayNode, isDeleted: Bool, animation: ListViewItemUpdateAnimation) {
+    let targetAlpha: CGFloat = isDeleted ? yougramDeletedMessageAlpha : 1.0
+    if isDeleted {
+        node.layer.allowsGroupOpacity = true
+    }
+    if abs(node.alpha - targetAlpha) > 0.001 {
+        animation.animator.updateAlpha(layer: node.layer, alpha: targetAlpha, completion: { [weak node] _ in
+            if let node, !isDeleted, node.alpha >= 0.999 {
+                node.layer.allowsGroupOpacity = false
+            }
+        })
+    } else if !isDeleted {
+        node.layer.allowsGroupOpacity = false
+    }
+}
+
+public func yougramResetDeletedOpacity(node: ASDisplayNode) {
+    if node.alpha != 1.0 {
+        node.alpha = 1.0
+    }
+    if node.layer.allowsGroupOpacity {
+        node.layer.allowsGroupOpacity = false
+    }
+}
+
 private let voiceMessageDurationFormatter: DateComponentsFormatter = {
     let formatter = DateComponentsFormatter()
     formatter.unitsStyle = .spellOut

@@ -894,7 +894,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
     }
     
     let isScheduled = chatPresentationInterfaceState.subject == .scheduledMessages
-    let editHistorySignal: Signal<YougramEditedMessageRecord?, NoError> = YougramCoreOptions.saveEditHistory ? context.engine.messages.yougramEditHistory(messageId: message.id) : .single(nil)
+    let editHistorySignal: Signal<YougramEditedMessageRecord?, NoError> = context.engine.messages.yougramEditHistory(messageId: message.id)
     
     let dataSignal: Signal<(MessageContextMenuData, [EngineMessage.Id: ChatUpdatingMessageMedia], InfoSummaryData, AppConfiguration, Bool, Int32, AvailableReactions?, TranslationSettings, LoggingSettings, NotificationSoundList?, (EnginePeer?, YougramEditedMessageRecord?)), NoError> = combineLatest(
         loadLimits,

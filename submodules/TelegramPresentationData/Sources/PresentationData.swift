@@ -260,6 +260,7 @@ public func currentPresentationDataAndSettings(accountManager: AccountManager<Te
         var contactSynchronizationSettings: PreferencesEntry?
         var stickerSettings: PreferencesEntry?
         var chatSettings: PreferencesEntry?
+        var yougramSettings: PreferencesEntry?
         
         init(
             localizationSettings: PreferencesEntry?,
@@ -273,7 +274,8 @@ public func currentPresentationDataAndSettings(accountManager: AccountManager<Te
             experimentalUISettings: PreferencesEntry?,
             contactSynchronizationSettings: PreferencesEntry?,
             stickerSettings: PreferencesEntry?,
-            chatSettings: PreferencesEntry?
+            chatSettings: PreferencesEntry?,
+            yougramSettings: PreferencesEntry?
         ) {
             self.localizationSettings = localizationSettings
             self.presentationThemeSettings = presentationThemeSettings
@@ -287,6 +289,7 @@ public func currentPresentationDataAndSettings(accountManager: AccountManager<Te
             self.contactSynchronizationSettings = contactSynchronizationSettings
             self.stickerSettings = stickerSettings
             self.chatSettings = chatSettings
+            self.yougramSettings = yougramSettings
         }
     }
     
@@ -303,6 +306,7 @@ public func currentPresentationDataAndSettings(accountManager: AccountManager<Te
         let contactSynchronizationSettings = transaction.getSharedData(ApplicationSpecificSharedDataKeys.contactSynchronizationSettings)
         let stickerSettings = transaction.getSharedData(ApplicationSpecificSharedDataKeys.stickerSettings)
         let chatSettings = transaction.getSharedData(ApplicationSpecificSharedDataKeys.chatSettings)
+        let yougramSettings = transaction.getSharedData(ApplicationSpecificSharedDataKeys.yougramSettings)
         
         return InternalData(
             localizationSettings: localizationSettings,
@@ -316,11 +320,16 @@ public func currentPresentationDataAndSettings(accountManager: AccountManager<Te
             experimentalUISettings: experimentalUISettings,
             contactSynchronizationSettings: contactSynchronizationSettings,
             stickerSettings: stickerSettings,
-            chatSettings: chatSettings
+            chatSettings: chatSettings,
+            yougramSettings: yougramSettings
         )
     }
     |> deliverOn(Queue(name: "PresentationData-Load", qos: .userInteractive))
     |> map { internalData -> InitialPresentationDataAndSettings in
+        // Yougram: hydrate settings before accounts start syncing updates (especially when Local Encryption disables UserDefaults mirroring).
+        let yougramSettings = internalData.yougramSettings?.get(YougramSettings.self) ?? YougramSettings.defaultSettings
+        YougramSettings.setCurrent(yougramSettings)
+
         let localizationSettings: LocalizationSettings?
         if let current = internalData.localizationSettings?.get(LocalizationSettings.self) {
             localizationSettings = current

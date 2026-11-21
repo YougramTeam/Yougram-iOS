@@ -139,11 +139,14 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
             }
             var previousRichText: RichTextMessageAttribute?
             var previousEphemeralReplacement: EphemeralReplacementMessageAttribute?
+            var previousYougramDeleted: YougramDeletedMessageAttribute?
             for attribute in previous {
                 if let attribute = attribute as? RichTextMessageAttribute {
                     previousRichText = attribute
                 } else if let attribute = attribute as? EphemeralReplacementMessageAttribute {
                     previousEphemeralReplacement = attribute
+                } else if let attribute = attribute as? YougramDeletedMessageAttribute {
+                    previousYougramDeleted = attribute
                 }
             }
             
@@ -186,6 +189,9 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
             }
             if let previousEphemeralReplacement, !updated.contains(where: { $0 is EphemeralReplacementMessageAttribute }) {
                 updated.append(previousEphemeralReplacement)
+            }
+            if let previousYougramDeleted, !updated.contains(where: { $0 is YougramDeletedMessageAttribute }) {
+                updated.append(previousYougramDeleted)
             }
         },
         decodeMessageThreadInfo: { entry in

@@ -284,6 +284,10 @@ public extension EngineMessage {
         return self._asMessage().editedTime
     }
 
+    var isYougramDeleted: Bool {
+        return self._asMessage().isYougramDeleted
+    }
+
     var sourceAuthorInfo: SourceAuthorInfoMessageAttribute? {
         return self._asMessage().sourceAuthorInfo
     }

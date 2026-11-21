@@ -127,8 +127,6 @@ private final class HistoryArguments {
 public func yougramLocalHistoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentImpl: ((ViewController) -> Void)?
-    let refreshPromise = ValuePromise<Int>(0, ignoreRepeated: false)
-    var refreshCounter = 0
     var latestEntriesByPeerId: [Int64: YougramHistoryIndexEntry] = [:]
 
     let arguments = HistoryArguments(
@@ -159,11 +157,7 @@ public func yougramLocalHistoryController(context: AccountContext) -> ViewContro
                     actions: [
                         TextAlertAction(type: .genericAction, title: strings.Common_Cancel, action: {}),
                         TextAlertAction(type: .destructiveAction, title: strings.Yougram_History_ClearAllAction, action: {
-                            let _ = (context.engine.messages.yougramClearHistory(peerId: nil)
-                            |> deliverOnMainQueue).startStandalone(completed: {
-                                refreshCounter += 1
-                                refreshPromise.set(refreshCounter)
-                            })
+                            let _ = context.engine.messages.yougramClearHistory(peerId: nil).startStandalone()
                         })
                     ]
                 )
@@ -172,10 +166,7 @@ public func yougramLocalHistoryController(context: AccountContext) -> ViewContro
         }
     )
 
-    let statsSignal = refreshPromise.get()
-    |> mapToSignal { _ -> Signal<YougramHistoryStats, NoError> in
-        return context.engine.messages.yougramAllHistoryStats()
-    }
+    let statsSignal = context.engine.messages.yougramAllHistoryStatsSignal()
 
     let signal = combineLatest(context.sharedContext.presentationData, YougramSettings.updates, statsSignal)
     |> deliverOnMainQueue
@@ -256,8 +247,6 @@ public func yougramDeletedMessagesController(
 ) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentImpl: ((ViewController) -> Void)?
-    let refreshPromise = ValuePromise<Int>(0, ignoreRepeated: false)
-    var refreshCounter = 0
     var copyableTexts: [String: String] = [:]
     var editedById: [String: YougramEditedMessageRecord] = [:]
 
@@ -278,11 +267,7 @@ public func yougramDeletedMessagesController(
                     actions: [
                         TextAlertAction(type: .genericAction, title: strings.Common_Cancel, action: {}),
                         TextAlertAction(type: .destructiveAction, title: strings.Yougram_History_ClearAllAction, action: {
-                            let _ = (context.engine.messages.yougramClearHistory(peerId: peerId)
-                            |> deliverOnMainQueue).startStandalone(completed: {
-                                refreshCounter += 1
-                                refreshPromise.set(refreshCounter)
-                            })
+                            let _ = context.engine.messages.yougramClearHistory(peerId: peerId).startStandalone()
                         })
                     ]
                 )
@@ -291,12 +276,7 @@ public func yougramDeletedMessagesController(
         }
     )
 
-    let dataSignal = refreshPromise.get()
-    |> mapToSignal { _ -> Signal<([YougramDeletedMessageRecord], [YougramEditedMessageRecord]), NoError> in
-        let deleted = context.engine.messages.yougramDeletedMessages(peerId: peerId, threadId: threadId)
-        let edited: Signal<[YougramEditedMessageRecord], NoError> = includeEdited ? context.engine.messages.yougramPeerEditedMessages(peerId: peerId) : .single([])
-        return combineLatest(deleted, edited)
-    }
+    let dataSignal = context.engine.messages.yougramPeerHistorySignal(peerId: peerId, threadId: threadId, includeEdited: includeEdited)
 
     let signal = combineLatest(context.sharedContext.presentationData, dataSignal)
     |> deliverOnMainQueue
@@ -413,7 +393,7 @@ public func yougramEditHistoryController(
         }
     )
 
-    let signal = combineLatest(context.sharedContext.presentationData, context.engine.messages.yougramEditHistory(messageId: messageId))
+    let signal = combineLatest(context.sharedContext.presentationData, context.engine.messages.yougramEditHistorySignal(messageId: messageId))
     |> deliverOnMainQueue
     |> map { presentationData, record -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let strings = presentationData.strings

@@ -89,6 +89,14 @@ public struct YougramPeerMessageHistory: Codable, Equatable {
 }
 
 public struct YougramHistoryIndexEntry: Codable, Equatable {
+    private enum CodingKeys: String, CodingKey {
+        case peerId
+        case peerTitle
+        case deletedCount
+        case editedCount
+        case updatedTimestamp
+    }
+
     public let peerId: PeerId
     public let peerTitle: String
     public let deletedCount: Int
@@ -107,6 +115,25 @@ public struct YougramHistoryIndexEntry: Codable, Equatable {
         self.deletedCount = deletedCount
         self.editedCount = editedCount
         self.updatedTimestamp = updatedTimestamp
+    }
+
+    // AdaptedPostboxDecoder only decodes fixed-width Int32/Int64 (not Swift Int), so wire counts as Int32.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.peerId = try container.decode(PeerId.self, forKey: .peerId)
+        self.peerTitle = try container.decode(String.self, forKey: .peerTitle)
+        self.deletedCount = Int(try container.decode(Int32.self, forKey: .deletedCount))
+        self.editedCount = Int(try container.decode(Int32.self, forKey: .editedCount))
+        self.updatedTimestamp = try container.decode(Int32.self, forKey: .updatedTimestamp)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.peerId, forKey: .peerId)
+        try container.encode(self.peerTitle, forKey: .peerTitle)
+        try container.encode(Int32(clamping: self.deletedCount), forKey: .deletedCount)
+        try container.encode(Int32(clamping: self.editedCount), forKey: .editedCount)
+        try container.encode(self.updatedTimestamp, forKey: .updatedTimestamp)
     }
 }
 
@@ -226,11 +253,41 @@ private func yougramSummarizeMedia(_ media: [Media]) -> String? {
             return "[Dice]"
         } else if item is TelegramMediaStory {
             return "[Story]"
+        } else if let game = item as? TelegramMediaGame {
+            return game.title.isEmpty ? "[Game]" : "[Game: \(game.title)]"
+        } else if let todo = item as? TelegramMediaTodo {
+            return todo.text.isEmpty ? "[Checklist]" : "[Checklist: \(todo.text)]"
+        } else if item is TelegramMediaGiveaway || item is TelegramMediaGiveawayResults {
+            return "[Giveaway]"
         } else if item is TelegramMediaInvoice || item is TelegramMediaPaidContent {
             return "[Media]"
         }
     }
     return nil
+}
+
+private func yougramIsPreservableDeletedMessage(_ message: Message) -> Bool {
+    let isEligibleNamespace: Bool
+    if message.id.namespace == Namespaces.Message.Cloud {
+        isEligibleNamespace = true
+    } else if message.id.peerId.namespace == Namespaces.Peer.SecretChat && (message.id.namespace == Namespaces.Message.Local || message.id.namespace == Namespaces.Message.SecretIncoming) {
+        isEligibleNamespace = true
+    } else {
+        isEligibleNamespace = false
+    }
+    guard isEligibleNamespace else {
+        return false
+    }
+    if message.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent }) {
+        return false
+    }
+    // Keep view-once / secret-chat self-destructing messages deleting normally.
+    // Do NOT exclude AutoremoveTimeoutMessageAttribute: Telegram attaches it to every message
+    // in chats with an Auto-Delete timer, and timer expirations go through ManagedAutoremoveMessageOperations.
+    if message.attributes.contains(where: { $0 is AutoclearTimeoutMessageAttribute }) {
+        return false
+    }
+    return true
 }
 
 func yougramRecordDeletedMessages(transaction: Transaction, ids: [MessageId]) {
@@ -240,15 +297,13 @@ func yougramRecordDeletedMessages(transaction: Transaction, ids: [MessageId]) {
 
     let now = Int32(Date().timeIntervalSince1970)
     var recordsByPeer: [PeerId: [YougramDeletedMessageRecord]] = [:]
+    var seenIds = Set<MessageId>()
 
     for id in ids {
-        guard id.namespace == Namespaces.Message.Cloud, let message = transaction.getMessage(id) else {
+        guard seenIds.insert(id).inserted, let message = transaction.getMessage(id) else {
             continue
         }
-        if message.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent }) {
-            continue
-        }
-        if message.attributes.contains(where: { $0 is AutoremoveTimeoutMessageAttribute || $0 is AutoclearTimeoutMessageAttribute }) {
+        guard yougramIsPreservableDeletedMessage(message) else {
             continue
         }
 
@@ -301,6 +356,135 @@ func yougramRecordDeletedMessages(transaction: Transaction, ids: [MessageId]) {
     }
 }
 
+/// Records remotely deleted messages in Local History and marks eligible messages in-place with
+/// `YougramDeletedMessageAttribute` so they remain visible in chat as semi-transparent instead of disappearing.
+/// Returns the preserved IDs and the remaining IDs that should still be removed from Postbox.
+func yougramPreserveDeletedMessages(transaction: Transaction, ids: [MessageId]) -> (preservedIds: Set<MessageId>, remainingToDelete: [MessageId]) {
+    guard YougramCoreOptions.saveDeletedMessages, !ids.isEmpty else {
+        return (Set(), ids)
+    }
+
+    yougramRecordDeletedMessages(transaction: transaction, ids: ids)
+
+    let now = Int32(Date().timeIntervalSince1970)
+    var preservedIds = Set<MessageId>()
+    var remainingToDelete: [MessageId] = []
+    var seenIds = Set<MessageId>()
+    var newlyPreservedIncomingByPeer: [PeerId: [MessageIndex]] = [:]
+
+    for id in ids {
+        guard seenIds.insert(id).inserted else {
+            continue
+        }
+        guard let message = transaction.getMessage(id) else {
+            remainingToDelete.append(id)
+            continue
+        }
+        guard yougramIsPreservableDeletedMessage(message) else {
+            remainingToDelete.append(id)
+            continue
+        }
+
+        preservedIds.insert(id)
+        if message.isYougramDeleted {
+            continue
+        }
+
+        if message.flags.contains(.Incoming) {
+            newlyPreservedIncomingByPeer[message.id.peerId, default: []].append(message.index)
+        }
+
+        transaction.updateMessage(id, update: { currentMessage in
+            if currentMessage.isYougramDeleted {
+                return .skip
+            }
+            var storeForwardInfo: StoreMessageForwardInfo?
+            if let forwardInfo = currentMessage.forwardInfo {
+                storeForwardInfo = StoreMessageForwardInfo(
+                    authorId: forwardInfo.author?.id,
+                    sourceId: forwardInfo.source?.id,
+                    sourceMessageId: forwardInfo.sourceMessageId,
+                    date: forwardInfo.date,
+                    authorSignature: forwardInfo.authorSignature,
+                    psaType: forwardInfo.psaType,
+                    flags: forwardInfo.flags
+                )
+            }
+            var updatedTags = currentMessage.tags
+            updatedTags.remove(.unseenPersonalMessage)
+            updatedTags.remove(.unseenReaction)
+            updatedTags.remove(.unseenPollVote)
+
+            var attributes = currentMessage.attributes
+            attributes.append(YougramDeletedMessageAttribute(deletedTimestamp: now))
+
+            return .update(StoreMessage(
+                id: currentMessage.id,
+                customStableId: nil,
+                globallyUniqueId: currentMessage.globallyUniqueId,
+                groupingKey: currentMessage.groupingKey,
+                threadId: currentMessage.threadId,
+                timestamp: currentMessage.timestamp,
+                flags: StoreMessageFlags(currentMessage.flags),
+                tags: updatedTags,
+                globalTags: currentMessage.globalTags,
+                localTags: currentMessage.localTags,
+                forwardInfo: storeForwardInfo,
+                authorId: currentMessage.author?.id,
+                text: currentMessage.text,
+                attributes: attributes,
+                media: currentMessage.media
+            ))
+        })
+    }
+
+    // Decrement unread counters for remotely deleted unread incoming messages so keeping
+    // them visible in chat never leaves phantom unread badges on the chat list.
+    for (peerId, incomingIndices) in newlyPreservedIncomingByPeer {
+        guard let combinedReadState = transaction.getCombinedPeerReadState(peerId) else {
+            continue
+        }
+        var byNamespace: [MessageId.Namespace: [MessageIndex]] = [:]
+        for index in incomingIndices {
+            byNamespace[index.id.namespace, default: []].append(index)
+        }
+        var updatedStates: [MessageId.Namespace: PeerReadState] = [:]
+        for (namespace, state) in combinedReadState.states {
+            guard let nsIndices = byNamespace[namespace], !nsIndices.isEmpty else {
+                continue
+            }
+            switch state {
+            case let .idBased(maxIncomingReadId, maxOutgoingReadId, maxKnownId, count, markedUnread):
+                let removedUnread = Int32(clamping: nsIndices.filter { $0.id.id > maxIncomingReadId }.count)
+                if removedUnread > 0 && count > 0 {
+                    updatedStates[namespace] = .idBased(
+                        maxIncomingReadId: maxIncomingReadId,
+                        maxOutgoingReadId: maxOutgoingReadId,
+                        maxKnownId: maxKnownId,
+                        count: max(0, count - removedUnread),
+                        markedUnread: markedUnread
+                    )
+                }
+            case let .indexBased(maxIncomingReadIndex, maxOutgoingReadIndex, count, markedUnread):
+                let removedUnread = Int32(clamping: nsIndices.filter { $0 > maxIncomingReadIndex }.count)
+                if removedUnread > 0 && count > 0 {
+                    updatedStates[namespace] = .indexBased(
+                        maxIncomingReadIndex: maxIncomingReadIndex,
+                        maxOutgoingReadIndex: maxOutgoingReadIndex,
+                        count: max(0, count - removedUnread),
+                        markedUnread: markedUnread
+                    )
+                }
+            }
+        }
+        if !updatedStates.isEmpty {
+            transaction.resetIncomingReadStates([peerId: updatedStates])
+        }
+    }
+
+    return (preservedIds, remainingToDelete)
+}
+
 func yougramRecordEditedMessage(transaction: Transaction, previousMessage: Message, newText: String) {
     guard YougramCoreOptions.saveEditHistory else {
         return
@@ -311,7 +495,7 @@ func yougramRecordEditedMessage(transaction: Transaction, previousMessage: Messa
     guard previousMessage.text != newText, !previousMessage.text.isEmpty else {
         return
     }
-    if previousMessage.attributes.contains(where: { $0 is AutoremoveTimeoutMessageAttribute || $0 is AutoclearTimeoutMessageAttribute }) {
+    if previousMessage.attributes.contains(where: { $0 is AutoclearTimeoutMessageAttribute }) {
         return
     }
 
@@ -360,6 +544,14 @@ func yougramRecordEditedMessage(transaction: Transaction, previousMessage: Messa
     savePeerHistory(transaction: transaction, peerId: peerId, history: history, updatedTimestamp: now)
 }
 
+private func buildHistoryStats(from entry: PreferencesEntry?) -> YougramHistoryStats {
+    let index = entry?.get(YougramHistoryIndex.self) ?? YougramHistoryIndex()
+    let sorted = index.entries.sorted { $0.updatedTimestamp > $1.updatedTimestamp }
+    let totalDeleted = sorted.reduce(0) { $0 + $1.deletedCount }
+    let totalEdited = sorted.reduce(0) { $0 + $1.editedCount }
+    return YougramHistoryStats(entries: sorted, totalDeletedCount: totalDeleted, totalEditedCount: totalEdited)
+}
+
 public extension TelegramEngine.Messages {
     func yougramDeletedMessages(peerId: PeerId, threadId: Int64? = nil) -> Signal<[YougramDeletedMessageRecord], NoError> {
         return self.account.postbox.transaction { transaction -> [YougramDeletedMessageRecord] in
@@ -386,12 +578,46 @@ public extension TelegramEngine.Messages {
 
     func yougramAllHistoryStats() -> Signal<YougramHistoryStats, NoError> {
         return self.account.postbox.transaction { transaction -> YougramHistoryStats in
-            let index = transaction.getPreferencesEntry(key: PreferencesKeys.yougramMessageHistoryIndex)?.get(YougramHistoryIndex.self) ?? YougramHistoryIndex()
-            let sorted = index.entries.sorted { $0.updatedTimestamp > $1.updatedTimestamp }
-            let totalDeleted = sorted.reduce(0) { $0 + $1.deletedCount }
-            let totalEdited = sorted.reduce(0) { $0 + $1.editedCount }
-            return YougramHistoryStats(entries: sorted, totalDeletedCount: totalDeleted, totalEditedCount: totalEdited)
+            return buildHistoryStats(from: transaction.getPreferencesEntry(key: PreferencesKeys.yougramMessageHistoryIndex))
         }
+    }
+
+    func yougramAllHistoryStatsSignal() -> Signal<YougramHistoryStats, NoError> {
+        return self.account.postbox.preferencesView(keys: [PreferencesKeys.yougramMessageHistoryIndex])
+        |> map { view -> YougramHistoryStats in
+            return buildHistoryStats(from: view.values[PreferencesKeys.yougramMessageHistoryIndex])
+        }
+        |> distinctUntilChanged
+    }
+
+    func yougramPeerHistorySignal(peerId: PeerId, threadId: Int64? = nil, includeEdited: Bool = false) -> Signal<([YougramDeletedMessageRecord], [YougramEditedMessageRecord]), NoError> {
+        let postbox = self.account.postbox
+        return postbox.preferencesView(keys: [PreferencesKeys.yougramMessageHistoryIndex])
+        |> mapToSignal { _ -> Signal<([YougramDeletedMessageRecord], [YougramEditedMessageRecord]), NoError> in
+            return postbox.transaction { transaction -> ([YougramDeletedMessageRecord], [YougramEditedMessageRecord]) in
+                let history = loadPeerHistory(transaction: transaction, peerId: peerId)
+                let deleted: [YougramDeletedMessageRecord]
+                if let threadId {
+                    deleted = history.deletedMessages.filter { $0.threadId == threadId }
+                } else {
+                    deleted = history.deletedMessages
+                }
+                let edited = includeEdited ? history.editedMessages : []
+                return (deleted, edited)
+            }
+        }
+    }
+
+    func yougramEditHistorySignal(messageId: MessageId) -> Signal<YougramEditedMessageRecord?, NoError> {
+        let postbox = self.account.postbox
+        return postbox.preferencesView(keys: [PreferencesKeys.yougramMessageHistoryIndex])
+        |> mapToSignal { _ -> Signal<YougramEditedMessageRecord?, NoError> in
+            return postbox.transaction { transaction -> YougramEditedMessageRecord? in
+                let history = loadPeerHistory(transaction: transaction, peerId: messageId.peerId)
+                return history.editedMessages.first(where: { $0.messageId == messageId })
+            }
+        }
+        |> distinctUntilChanged
     }
 
     func yougramAllDeletedMessages(limit: Int = 200) -> Signal<[YougramDeletedMessageRecord], NoError> {

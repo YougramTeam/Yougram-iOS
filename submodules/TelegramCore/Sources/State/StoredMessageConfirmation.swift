@@ -211,9 +211,18 @@ func confirmStoredMessages(accountPeerId: PeerId, postbox: Postbox, source: Fetc
 /// Returns the ids it deleted: the private-chat and basic-group ones, then the channel ones, each in the order given.
 @discardableResult
 func deleteStoredMessagesAsReceivedDeletion(transaction: Transaction, mediaBox: MediaBox, ids: [MessageId]) -> [MessageId] {
+    // Yougram: record offline/reconciled deletions and preserve eligible messages in chat as semi-transparent.
+    let targetIds: [MessageId]
+    if YougramCoreOptions.saveDeletedMessages {
+        let (_, remaining) = yougramPreserveDeletedMessages(transaction: transaction, ids: ids)
+        targetIds = remaining
+    } else {
+        targetIds = ids
+    }
+
     var regularIds: [MessageId] = []
     var channelIds: [MessageId] = []
-    for id in ids {
+    for id in targetIds {
         if id.peerId.namespace == Namespaces.Peer.CloudChannel {
             channelIds.append(id)
         } else {
@@ -235,9 +244,11 @@ func deleteStoredMessagesAsReceivedDeletion(transaction: Transaction, mediaBox: 
     }
 
     let deletedIds = regularIds + channelIds
-    // The received-deletion events (owner decision D1): reported inside this transaction, as the replay reports
-    // its deletions inside its own; the deletedMessages pipe fires once it has committed.
-    StoredMessageConfirmationDeletionReporters.shared.report(deletedIds, mediaBox: mediaBox, transaction: transaction)
+    if !deletedIds.isEmpty {
+        // The received-deletion events (owner decision D1): reported inside this transaction, as the replay reports
+        // its deletions inside its own; the deletedMessages pipe fires once it has committed.
+        StoredMessageConfirmationDeletionReporters.shared.report(deletedIds, mediaBox: mediaBox, transaction: transaction)
+    }
     return deletedIds
 }
 
@@ -270,6 +281,14 @@ func applyStoredMessageConfirmation(transaction: Transaction, accountPeerId: Pee
 
     let deletedIds = deleteStoredMessagesAsReceivedDeletion(transaction: transaction, mediaBox: mediaBox, ids: missingIds)
     if !refreshed.isEmpty {
+        // Yougram: record previous text versions discovered during confirmation refresh before overwriting.
+        if YougramCoreOptions.saveEditHistory {
+            for message in refreshed {
+                if case let .Id(id) = message.id, let previousMessage = transaction.getMessage(id) {
+                    yougramRecordEditedMessage(transaction: transaction, previousMessage: previousMessage, newText: message.text)
+                }
+            }
+        }
         updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: confirmation.peers)
         let _ = transaction.addMessages(refreshed, location: .Random)
     }
@@ -323,7 +342,13 @@ func storedCloudMessagesAboveTopMessages(transaction: Transaction, fetchedChats:
         var lowerBound = topId
         while lowerBound < Int32.max {
             let page = transaction.messageIdsInRange(peerId: peerId, namespace: Namespaces.Message.Cloud, range: (lowerBound + 1) ... Int32.max, limit: pageLimit)
-            ids.append(contentsOf: page)
+            // Yougram: skip messages already marked as preserved deleted messages.
+            for id in page {
+                if let message = transaction.getMessage(id), message.isYougramDeleted {
+                    continue
+                }
+                ids.append(id)
+            }
             guard page.count >= pageLimit, let last = page.last, last.id > lowerBound else {
                 break
             }

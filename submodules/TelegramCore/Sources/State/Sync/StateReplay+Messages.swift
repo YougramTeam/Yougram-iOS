@@ -275,35 +275,78 @@ extension ReplayContext {
     }
     
     func applyDeleteMessagesWithGlobalIds(_ ids: [Int32]) {
-        // Yougram: snapshot messages before server recall/deletion removes them locally.
+        // Yougram: record remotely deleted messages and preserve eligible ones in chat as semi-transparent.
+        let remainingGlobalIds: [Int32]
         if YougramCoreOptions.saveDeletedMessages {
             let messageIds = transaction.messageIdsForGlobalIds(ids)
-            yougramRecordDeletedMessages(transaction: transaction, ids: messageIds)
+            let (preservedIds, _) = yougramPreserveDeletedMessages(transaction: transaction, ids: messageIds)
+            if preservedIds.isEmpty {
+                remainingGlobalIds = ids
+            } else {
+                let preservedGlobalIds = Set(preservedIds.map(\.id))
+                remainingGlobalIds = ids.filter { !preservedGlobalIds.contains($0) }
+            }
+        } else {
+            remainingGlobalIds = ids
         }
-        var resourceIds: [MediaResourceId] = []
-        transaction.deleteMessagesWithGlobalIds(ids, forEachMedia: { media in
-            addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
-        })
-        if !resourceIds.isEmpty {
-            let _ = mediaBox.removeCachedResources(Array(Set(resourceIds)), force: true).start()
+        if !remainingGlobalIds.isEmpty {
+            var resourceIds: [MediaResourceId] = []
+            transaction.deleteMessagesWithGlobalIds(remainingGlobalIds, forEachMedia: { media in
+                addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
+            })
+            if !resourceIds.isEmpty {
+                let _ = mediaBox.removeCachedResources(Array(Set(resourceIds)), force: true).start()
+            }
+            deletedMessageIds.append(contentsOf: remainingGlobalIds.map { .global($0) })
         }
-        deletedMessageIds.append(contentsOf: ids.map { .global($0) })
     }
     
     func applyDeleteMessages(_ ids: [MessageId]) {
-        // Yougram: snapshot messages before server recall/deletion removes them locally.
+        // Yougram: record remotely deleted messages and preserve eligible ones in chat as semi-transparent.
+        let remainingIds: [MessageId]
         if YougramCoreOptions.saveDeletedMessages {
-            yougramRecordDeletedMessages(transaction: transaction, ids: ids)
+            let (_, remaining) = yougramPreserveDeletedMessages(transaction: transaction, ids: ids)
+            remainingIds = remaining
+        } else {
+            remainingIds = ids
         }
-        _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: ids, manualAddMessageThreadStatsDifference: { id, add, remove in
-            self.addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
-        })
-        deletedMessageIds.append(contentsOf: ids.map { .messageId($0) })
+        if !remainingIds.isEmpty {
+            _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: remainingIds, manualAddMessageThreadStatsDifference: { id, add, remove in
+                self.addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
+            })
+            deletedMessageIds.append(contentsOf: remainingIds.map { .messageId($0) })
+        }
     }
     
     func applyUpdateMinAvailableMessage(_ id: MessageId) {
         if let message = transaction.getMessage(id) {
             updatePeerChatInclusionWithMinTimestamp(transaction: transaction, id: id.peerId, minTimestamp: message.timestamp, forceRootGroupIfNotExists: false)
+        }
+        if YougramCoreOptions.saveDeletedMessages, id.id >= 1 {
+            var storedIds: [MessageId] = []
+            var lowerBound: Int32 = 1
+            let pageLimit = 500
+            while lowerBound <= id.id {
+                let page = transaction.messageIdsInRange(peerId: id.peerId, namespace: id.namespace, range: lowerBound ... id.id, limit: pageLimit)
+                storedIds.append(contentsOf: page)
+                guard page.count >= pageLimit, let last = page.last, last.id >= lowerBound, last.id < id.id else {
+                    break
+                }
+                lowerBound = last.id + 1
+            }
+            if !storedIds.isEmpty {
+                let (_, remainingIds) = yougramPreserveDeletedMessages(transaction: transaction, ids: storedIds)
+                if !remainingIds.isEmpty {
+                    var resourceIds: [MediaResourceId] = []
+                    transaction.deleteMessages(remainingIds, forEachMedia: { media in
+                        addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
+                    })
+                    if !resourceIds.isEmpty {
+                        let _ = mediaBox.removeCachedResources(Array(Set(resourceIds)), force: true).start()
+                    }
+                }
+            }
+            return
         }
         var resourceIds: [MediaResourceId] = []
         transaction.deleteMessagesInRange(peerId: id.peerId, namespace: id.namespace, minId: 1, maxId: id.id, forEachMedia: { media in

@@ -43,6 +43,9 @@ private enum HistoryState {
     }
     
     func isMessageValid(_ message: Message) -> Bool {
+        if message.isYougramDeleted {
+            return true
+        }
         switch self {
         case let .channel(_, state):
             if let invalidatedPts = state.invalidatedPts {
@@ -810,7 +813,10 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                 }
                 
                 var maybeRemovedMessageIds: [MessageId] = []
-                for id in previous.keys {
+                for (id, previousMessage) in previous {
+                    if previousMessage.isYougramDeleted {
+                        continue
+                    }
                     if !validMessageIds.contains(id) {
                         maybeRemovedMessageIds.append(id)
                     }
@@ -892,8 +898,12 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                         }
                                     }
                                     
+                                    var yougramEditedPreviousMessage: Message?
                                     transaction.updateMessage(id, update: { currentMessage in
                                         if updatedTimestamp != timestamp {
+                                            if YougramCoreOptions.saveEditHistory {
+                                                yougramEditedPreviousMessage = currentMessage
+                                            }
                                             var updatedLocalTags = message.localTags
                                             if currentMessage.localTags.contains(.OutgoingLiveLocation) {
                                                 updatedLocalTags.insert(.OutgoingLiveLocation)
@@ -919,6 +929,9 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                             return .update(StoreMessage(id: message.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: updatedFlags, tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                         }
                                     })
+                                    if let yougramEditedPreviousMessage {
+                                        yougramRecordEditedMessage(transaction: transaction, previousMessage: yougramEditedPreviousMessage, newText: message.text)
+                                    }
                                     
                                     if previous[id] == nil {
                                         print("\(id) missing")
@@ -962,6 +975,7 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                             }
                         }
                     
+                        var yougramIdsToDelete: [MessageId] = []
                         for id in removedMessageIds {
                             if !validMessageIds.contains(id) {
                                 if let tag = tag {
@@ -992,9 +1006,21 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                         return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                     })
                                 } else {
-                                    _internal_deleteMessages(transaction: transaction, mediaBox: postbox.mediaBox, ids: [id])
-                                    Logger.shared.log("HistoryValidation", "deleting message \(id) in \(id.peerId)")
+                                    yougramIdsToDelete.append(id)
                                 }
+                            }
+                        }
+                        if !yougramIdsToDelete.isEmpty {
+                            let finalDeleteIds: [MessageId]
+                            if YougramCoreOptions.saveDeletedMessages {
+                                let preserved = yougramPreserveDeletedMessages(transaction: transaction, ids: yougramIdsToDelete)
+                                finalDeleteIds = preserved.remainingToDelete
+                            } else {
+                                finalDeleteIds = yougramIdsToDelete
+                            }
+                            for id in finalDeleteIds {
+                                _internal_deleteMessages(transaction: transaction, mediaBox: postbox.mediaBox, ids: [id])
+                                Logger.shared.log("HistoryValidation", "deleting message \(id) in \(id.peerId)")
                             }
                         }
                     }
@@ -1064,7 +1090,10 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
             }
             
             var maybeRemovedMessageIds: [MessageId] = []
-            for id in previous.keys {
+            for (id, previousMessage) in previous {
+                if previousMessage.isYougramDeleted {
+                    continue
+                }
                 if !validMessageIds.contains(id) {
                     maybeRemovedMessageIds.append(id)
                 }
@@ -1136,8 +1165,12 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
                                     }
                                 }
                                 
+                                var yougramEditedPreviousMessage: Message?
                                 transaction.updateMessage(id, update: { currentMessage in
                                     if updatedTimestamp != timestamp {
+                                        if YougramCoreOptions.saveEditHistory {
+                                            yougramEditedPreviousMessage = currentMessage
+                                        }
                                         var updatedLocalTags = message.localTags
                                         if currentMessage.localTags.contains(.OutgoingLiveLocation) {
                                             updatedLocalTags.insert(.OutgoingLiveLocation)
@@ -1163,6 +1196,9 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
                                         return .update(StoreMessage(id: message.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: updatedFlags, tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                     }
                                 })
+                                if let yougramEditedPreviousMessage {
+                                    yougramRecordEditedMessage(transaction: transaction, previousMessage: yougramEditedPreviousMessage, newText: message.text)
+                                }
                                 
                                 if previous[id] == nil {
                                     print("\(id) missing")
@@ -1173,8 +1209,21 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
                         }
                     }
                 
+                    var yougramIdsToDelete: [MessageId] = []
                     for id in removedMessageIds {
                         if !validMessageIds.contains(id) {
+                            yougramIdsToDelete.append(id)
+                        }
+                    }
+                    if !yougramIdsToDelete.isEmpty {
+                        let finalDeleteIds: [MessageId]
+                        if YougramCoreOptions.saveDeletedMessages {
+                            let preserved = yougramPreserveDeletedMessages(transaction: transaction, ids: yougramIdsToDelete)
+                            finalDeleteIds = preserved.remainingToDelete
+                        } else {
+                            finalDeleteIds = yougramIdsToDelete
+                        }
+                        for id in finalDeleteIds {
                             _internal_deleteMessages(transaction: transaction, mediaBox: postbox.mediaBox, ids: [id])
                             Logger.shared.log("HistoryValidation", "deleting thread message \(id) in \(id.peerId)")
                         }

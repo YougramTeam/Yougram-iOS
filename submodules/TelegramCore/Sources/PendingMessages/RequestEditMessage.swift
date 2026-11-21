@@ -280,7 +280,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
                                         updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: peers)
 
                                         if let message = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForumOrMonoForum), case let .Id(id) = message.id {
+                                            var editedPreviousMessage: Message?
                                             transaction.updateMessage(id, update: { previousMessage in
+                                                editedPreviousMessage = previousMessage
                                                 var updatedFlags = message.flags
                                                 var updatedLocalTags = message.localTags
                                                 if previousMessage.localTags.contains(.OutgoingLiveLocation) {
@@ -299,6 +301,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
 
                                                 return .update(message.withUpdatedLocalTags(updatedLocalTags).withUpdatedFlags(updatedFlags).withUpdatedMedia(updatedMedia))
                                             })
+                                            if let editedPreviousMessage, YougramCoreOptions.saveEditHistory {
+                                                yougramRecordEditedMessage(transaction: transaction, previousMessage: editedPreviousMessage, newText: message.text)
+                                            }
                                         }
                                     case .updateNewMessage(let data):
                                         let message = data.message
@@ -306,7 +311,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
                                         updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: peers)
 
                                         if let message = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForumOrMonoForum), case let .Id(id) = message.id {
+                                            var editedPreviousMessage: Message?
                                             transaction.updateMessage(id, update: { previousMessage in
+                                                editedPreviousMessage = previousMessage
                                                 var updatedFlags = message.flags
                                                 var updatedLocalTags = message.localTags
                                                 if previousMessage.localTags.contains(.OutgoingLiveLocation) {
@@ -325,6 +332,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
 
                                                 return .update(message.withUpdatedLocalTags(updatedLocalTags).withUpdatedFlags(updatedFlags).withUpdatedMedia(updatedMedia))
                                             })
+                                            if let editedPreviousMessage, YougramCoreOptions.saveEditHistory {
+                                                yougramRecordEditedMessage(transaction: transaction, previousMessage: editedPreviousMessage, newText: message.text)
+                                            }
                                         }
                                     case .updateEditChannelMessage(let data):
                                         let message = data.message
@@ -332,7 +342,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
                                         updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: peers)
 
                                         if let message = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForumOrMonoForum), case let .Id(id) = message.id {
+                                            var editedPreviousMessage: Message?
                                             transaction.updateMessage(id, update: { previousMessage in
+                                                editedPreviousMessage = previousMessage
                                                 var updatedFlags = message.flags
                                                 var updatedLocalTags = message.localTags
                                                 if previousMessage.localTags.contains(.OutgoingLiveLocation) {
@@ -351,6 +363,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
 
                                                 return .update(message.withUpdatedLocalTags(updatedLocalTags).withUpdatedFlags(updatedFlags).withUpdatedMedia(updatedMedia))
                                             })
+                                            if let editedPreviousMessage, YougramCoreOptions.saveEditHistory {
+                                                yougramRecordEditedMessage(transaction: transaction, previousMessage: editedPreviousMessage, newText: message.text)
+                                            }
                                         }
                                     case .updateNewChannelMessage(let data):
                                         let message = data.message
@@ -358,7 +373,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
                                         updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: peers)
                                         
                                         if let message = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForumOrMonoForum), case let .Id(id) = message.id {
+                                            var editedPreviousMessage: Message?
                                             transaction.updateMessage(id, update: { previousMessage in
+                                                editedPreviousMessage = previousMessage
                                                 var updatedFlags = message.flags
                                                 var updatedLocalTags = message.localTags
                                                 if previousMessage.localTags.contains(.OutgoingLiveLocation) {
@@ -377,6 +394,9 @@ private func requestEditMessageInternal(accountPeerId: PeerId, postbox: Postbox,
                                                 
                                                 return .update(message.withUpdatedLocalTags(updatedLocalTags).withUpdatedFlags(updatedFlags).withUpdatedMedia(updatedMedia))
                                             })
+                                            if let editedPreviousMessage, YougramCoreOptions.saveEditHistory {
+                                                yougramRecordEditedMessage(transaction: transaction, previousMessage: editedPreviousMessage, newText: message.text)
+                                            }
                                         }
                                     default:
                                         break
