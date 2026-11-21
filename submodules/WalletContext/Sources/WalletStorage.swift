@@ -568,7 +568,7 @@ actor WalletEngineStorage {
             kSecAttrAccount as String: account,
             kSecAttrSynchronizable as String: false
         ]
-        if let group = try? WalletVault.keychainAccessGroup(), let group {
+        if let group = try? WalletVault.keychainAccessGroup() {
             query[kSecAttrAccessGroup as String] = group
         }
         return query
