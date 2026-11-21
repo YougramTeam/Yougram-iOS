@@ -27,6 +27,7 @@ public final class WebAppTitleView: UIView {
     
     private let titleNode: ImmediateTextNode
     private let subtitleNode: ImmediateTextNode
+    private let urlPillView = WebAppUrlPillView()
     private var titleCredibilityIconView: ComponentHostView<Empty>?
     private var titleVerificationIconView: ComponentHostView<Empty>?
     
@@ -35,6 +36,26 @@ public final class WebAppTitleView: UIView {
             if self.title != oldValue {
                 self.update()
             }
+        }
+    }
+
+    public var url: String? {
+        didSet {
+            if self.url != oldValue {
+                self.update()
+            }
+        }
+    }
+
+    public var onCopyUrl: ((String) -> Void)? {
+        didSet {
+            self.urlPillView.onCopyUrl = self.onCopyUrl
+        }
+    }
+
+    public var onLongPressUrl: ((String) -> Void)? {
+        didSet {
+            self.urlPillView.onLongPressUrl = self.onLongPressUrl
         }
     }
     
@@ -104,16 +125,55 @@ public final class WebAppTitleView: UIView {
         
         self.addSubnode(self.titleNode)
         self.addSubnode(self.subtitleNode)
+        self.urlPillView.isHidden = true
+        self.addSubview(self.urlPillView)
     }
     
     required public init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if !self.urlPillView.isHidden {
+            return self.urlPillView.hitTest(self.convert(point, to: self.urlPillView), with: event)
+        }
+        return super.hitTest(point, with: event)
     }
     
     override public func layoutSubviews() {
         super.layoutSubviews()
         
         let size = self.bounds.size
+
+        if let url = self.url, webAppDisplayDomain(from: url) != nil {
+            self.titleNode.isHidden = true
+            self.subtitleNode.isHidden = true
+            self.titleCredibilityIconView?.isHidden = true
+            self.titleVerificationIconView?.isHidden = true
+            self.urlPillView.isHidden = false
+
+            let primaryColor = self.primaryTextColor ?? self.theme.rootController.navigationBar.primaryTextColor
+            let secondaryColor = self.secondaryTextColor ?? self.theme.rootController.navigationBar.secondaryTextColor
+            let pillSize = CGSize(width: max(1.0, size.width), height: min(max(1.0, size.height), 36.0))
+            self.urlPillView.frame = CGRect(origin: CGPoint(x: 0.0, y: floorToScreenPixels((size.height - pillSize.height) / 2.0)), size: pillSize)
+            self.urlPillView.update(
+                url: url,
+                theme: self.theme,
+                primaryTextColor: primaryColor,
+                secondaryTextColor: secondaryColor,
+                isDark: self.theme.overallDarkAppearance,
+                compact: false,
+                size: pillSize,
+                transition: .immediate
+            )
+            return
+        }
+
+        self.urlPillView.isHidden = true
+        self.titleNode.isHidden = false
+        self.subtitleNode.isHidden = false
+        self.titleCredibilityIconView?.isHidden = false
+        self.titleVerificationIconView?.isHidden = false
         let spacing: CGFloat = 0.0
         
         // As the chat header's third-party verification icon: 20pt, 4pt before the title.

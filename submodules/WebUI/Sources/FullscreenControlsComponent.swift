@@ -13,8 +13,10 @@ import EmojiStatusComponent
 
 final class FullscreenControlsComponent: Component {
     let context: AccountContext
+    let theme: PresentationTheme
     let strings: PresentationStrings
     let title: String
+    let url: String?
     let isVerified: Bool
     /// The bot's third-party verification icon (a custom emoji), drawn left of the title.
     let verificationIconFileId: Int64?
@@ -27,11 +29,15 @@ final class FullscreenControlsComponent: Component {
     let backPressed: () -> Void
     let minimizePressed: () -> Void
     let morePressed: (ASDisplayNode, ContextGesture?) -> Void
+    let onCopyUrl: (String) -> Void
+    let onLongPressUrl: (String) -> Void
 
     init(
         context: AccountContext,
+        theme: PresentationTheme,
         strings: PresentationStrings,
         title: String,
+        url: String?,
         isVerified: Bool,
         verificationIconFileId: Int64?,
         insets: UIEdgeInsets,
@@ -40,11 +46,15 @@ final class FullscreenControlsComponent: Component {
         showsBackButton: Bool = true,
         backPressed: @escaping () -> Void,
         minimizePressed: @escaping () -> Void,
-        morePressed: @escaping (ASDisplayNode, ContextGesture?) -> Void
+        morePressed: @escaping (ASDisplayNode, ContextGesture?) -> Void,
+        onCopyUrl: @escaping (String) -> Void,
+        onLongPressUrl: @escaping (String) -> Void
     ) {
         self.context = context
+        self.theme = theme
         self.strings = strings
         self.title = title
+        self.url = url
         self.isVerified = isVerified
         self.verificationIconFileId = verificationIconFileId
         self.insets = insets
@@ -54,13 +64,21 @@ final class FullscreenControlsComponent: Component {
         self.backPressed = backPressed
         self.minimizePressed = minimizePressed
         self.morePressed = morePressed
+        self.onCopyUrl = onCopyUrl
+        self.onLongPressUrl = onLongPressUrl
     }
 
     static func ==(lhs: FullscreenControlsComponent, rhs: FullscreenControlsComponent) -> Bool {
         if lhs.context !== rhs.context {
             return false
         }
+        if lhs.theme !== rhs.theme {
+            return false
+        }
         if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.url != rhs.url {
             return false
         }
         if lhs.isVerified != rhs.isVerified {
@@ -96,6 +114,7 @@ final class FullscreenControlsComponent: Component {
         private let credibility = ComponentView<Empty>()
         private var verificationIcon: ComponentView<Empty>?
         private let buttonTitle = ComponentView<Empty>()
+        private let urlPillView = WebAppUrlPillView()
         private let minimizeButton = ComponentView<Empty>()
         private let moreNode = MoreButtonNode(theme: defaultPresentationTheme, size: CGSize(width: 36.0, height: 36.0), encircled: false)
         
@@ -119,6 +138,9 @@ final class FullscreenControlsComponent: Component {
             self.addSubview(self.leftButton)
             
             self.addSubview(self.titleClippingView)
+
+            self.urlPillView.isHidden = true
+            self.addSubview(self.urlPillView)
             
             self.rightBackgroundView.clipsToBounds = true
             self.addSubview(self.rightBackgroundView)
@@ -410,6 +432,30 @@ final class FullscreenControlsComponent: Component {
             self.leftButton.isHidden = !component.showsBackButton
             self.titleClippingView.isHidden = !component.showsBackButton
             self.closeIcon.view?.isHidden = !component.showsBackButton
+
+            let leftEdge = component.showsBackButton ? leftBackgroundFrame.maxX : (sideInset + component.insets.left)
+            let centerMinX = leftEdge + 8.0
+            let centerMaxX = rightBackgroundFrame.minX - 8.0
+            let centerWidth = max(0.0, centerMaxX - centerMinX)
+            if let url = component.url, webAppDisplayDomain(from: url) != nil, centerWidth >= 72.0 {
+                self.urlPillView.isHidden = false
+                self.urlPillView.onCopyUrl = component.onCopyUrl
+                self.urlPillView.onLongPressUrl = component.onLongPressUrl
+                let pillFrame = CGRect(origin: CGPoint(x: centerMinX, y: 0.0), size: CGSize(width: centerWidth, height: leftBackgroundSize.height))
+                transition.setFrame(view: self.urlPillView, frame: pillFrame)
+                self.urlPillView.update(
+                    url: url,
+                    theme: component.theme,
+                    primaryTextColor: textColor,
+                    secondaryTextColor: textColor.withAlphaComponent(0.75),
+                    isDark: component.statusBarStyle != .Black,
+                    compact: true,
+                    size: pillFrame.size,
+                    transition: transition
+                )
+            } else {
+                self.urlPillView.isHidden = true
+            }
             
             if isFirstTime {
                 let timer = Timer(timeInterval: 2.5, target: self, selector: #selector(self.timerEvent), userInfo: nil, repeats: false)

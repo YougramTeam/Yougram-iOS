@@ -56,6 +56,7 @@ swift_library(
         "//submodules/TelegramUI/Components/Utils/GenerateStickerPlaceholderImage",
         "//submodules/AvatarNode",
         "//submodules/TelegramUI/Components/GlassBarButtonComponent",
+        "//submodules/TelegramUI/Components/GlassBackgroundComponent",
         "//submodules/Components/BundleIconComponent",
         "//submodules/TelegramUI/Components/LottieComponent",
         "//submodules/TelegramUI/Components/AlertComponent",

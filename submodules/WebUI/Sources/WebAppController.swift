@@ -253,6 +253,8 @@ public final class WebAppController: ViewController, AttachmentContainable {
         
         private var iconDisposable: Disposable?
         fileprivate var icon: UIImage?
+        private var currentUrl: String?
+        private var urlObservation: NSKeyValueObservation?
         
         private var botVerificationIconDisposable: Disposable?
         /// The bot's third-party verification icon, shown left of its name in the header and the fullscreen controls.
@@ -313,6 +315,13 @@ public final class WebAppController: ViewController, AttachmentContainable {
             }
             
             self.webView = webView
+            self.urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+                Queue.mainQueue().async {
+                    if let absoluteString = webView.url?.absoluteString {
+                        self?.updateCurrentUrl(absoluteString)
+                    }
+                }
+            }
             
             self.addSubnode(self.backgroundNode)
             self.addSubnode(self.headerBackgroundNode)
@@ -486,6 +495,7 @@ public final class WebAppController: ViewController, AttachmentContainable {
             self.keepAliveDisposable?.dispose()
             self.paymentDisposable?.dispose()
             
+            self.urlObservation?.invalidate()
             self.webView?.removeObserver(self, forKeyPath: #keyPath(WKWebView.estimatedProgress))
             
             if self.motionManager.isAccelerometerActive {
@@ -493,6 +503,19 @@ public final class WebAppController: ViewController, AttachmentContainable {
             }
             if self.motionManager.isGyroActive {
                 self.motionManager.stopGyroUpdates()
+            }
+        }
+
+        private func updateCurrentUrl(_ urlString: String?) {
+            guard let urlString, !urlString.isEmpty, !urlString.lowercased().hasPrefix("about:") else {
+                return
+            }
+            if urlString != self.currentUrl {
+                self.currentUrl = urlString
+                self.controller?.titleView?.url = urlString
+                if self.controller?.isFullscreen == true, let (layout, navigationBarHeight) = self.validLayout {
+                    self.containerLayoutUpdated(layout, navigationBarHeight: navigationBarHeight, transition: .immediate)
+                }
             }
         }
         
@@ -551,6 +574,7 @@ public final class WebAppController: ViewController, AttachmentContainable {
             }
             #endif*/
 
+            self.updateCurrentUrl(url.absoluteString)
             if self.controller?.sameOrigin == true {
                 self.webView?.bindTrustedOrigin(from: url)
             } else {
@@ -802,6 +826,9 @@ public final class WebAppController: ViewController, AttachmentContainable {
         }
                         
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            if let urlString = webView.url?.absoluteString {
+                self.updateCurrentUrl(urlString)
+            }
             Queue.mainQueue().after(0.6, {
                 self.animateTransitionIn()
             })
@@ -974,8 +1001,10 @@ public final class WebAppController: ViewController, AttachmentContainable {
                     component: AnyComponent(
                         FullscreenControlsComponent(
                             context: self.context,
+                            theme: self.presentationData.theme,
                             strings: self.presentationData.strings,
                             title: controller.botName,
+                            url: self.currentUrl,
                             isVerified: controller.botVerified,
                             verificationIconFileId: self.botVerificationIconFileId,
                             insets: UIEdgeInsets(top: 0.0, left: layout.safeInsets.left, bottom: 0.0, right: layout.safeInsets.right + layout.navigationBarTrailingButtonsInset),
@@ -999,6 +1028,12 @@ public final class WebAppController: ViewController, AttachmentContainable {
                                     return
                                 }
                                 self.controller?.morePressed(view: node.view, gesture: gesture)
+                            },
+                            onCopyUrl: { [weak self] url in
+                                self?.controller?.copyUrlWithToast(url)
+                            },
+                            onLongPressUrl: { [weak self] url in
+                                self?.controller?.presentUrlActionSheet(url)
                             }
                         )
                     ),
@@ -3755,6 +3790,13 @@ public final class WebAppController: ViewController, AttachmentContainable {
         if !self.isVerifyAgeBot {
             let titleView = WebAppTitleView(context: self.context, theme: self.presentationData.theme, isAttachMenu: self.source == .attachMenu)
             titleView.title = WebAppTitle(title: params.botName, counter: self.presentationData.strings.WebApp_Miniapp, isVerified: params.botVerified)
+            titleView.url = params.url
+            titleView.onCopyUrl = { [weak self] url in
+                self?.copyUrlWithToast(url)
+            }
+            titleView.onLongPressUrl = { [weak self] url in
+                self?.presentUrlActionSheet(url)
+            }
             self.navigationItem.titleView = titleView
             self.titleView = titleView
         }
@@ -4266,6 +4308,40 @@ public final class WebAppController: ViewController, AttachmentContainable {
             imageView.image = image
         })
         return imageView
+    }
+
+    fileprivate func copyUrlWithToast(_ url: String) {
+        UIPasteboard.general.string = url
+        self.present(UndoOverlayController(
+            presentationData: self.presentationData,
+            content: .linkCopied(title: nil, text: self.presentationData.strings.Conversation_LinkCopied),
+            elevatedLayout: false,
+            animateInAsReplacement: false,
+            action: { _ in return false }
+        ), in: .window(.root))
+    }
+
+    fileprivate func presentUrlActionSheet(_ url: String) {
+        let actionSheet = ActionSheetController(presentationData: self.presentationData)
+        var items: [ActionSheetItem] = []
+        items.append(ActionSheetTextItem(title: url))
+        items.append(ActionSheetButtonItem(title: self.presentationData.strings.Chat_ContextMenu_OpenInBrowser, color: .accent, action: { [weak self, weak actionSheet] in
+            actionSheet?.dismissAnimated()
+            self?.context.sharedContext.applicationBindings.openUrl(url)
+        }))
+        items.append(ActionSheetButtonItem(title: self.presentationData.strings.ShareMenu_CopyShareLink, color: .accent, action: { [weak self, weak actionSheet] in
+            actionSheet?.dismissAnimated()
+            self?.copyUrlWithToast(url)
+        }))
+        actionSheet.setItemGroups([
+            ActionSheetItemGroup(items: items),
+            ActionSheetItemGroup(items: [
+                ActionSheetButtonItem(title: self.presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak actionSheet] in
+                    actionSheet?.dismissAnimated()
+                })
+            ])
+        ])
+        self.present(actionSheet, in: .window(.root))
     }
 }
 

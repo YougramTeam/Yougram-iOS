@@ -17,6 +17,8 @@ import EmojiStatusComponent
 
 private final class ChatButtonKeyboardInputButtonNode: HighlightTrackingButtonNode {
     private(set) var button: ReplyMarkupButton?
+    var longTapped: ((ReplyMarkupButton) -> Void)?
+    private var longTapRecognizer: UILongPressGestureRecognizer?
         
     private let backgroundContainerNode: ASDisplayNode
     private let backgroundView: UIImageView
@@ -65,10 +67,43 @@ private final class ChatButtonKeyboardInputButtonNode: HighlightTrackingButtonNo
                 }
             }
         }
+
+        let longTapRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(self.longTapGesture(_:)))
+        longTapRecognizer.minimumPressDuration = 0.3
+        longTapRecognizer.isEnabled = false
+        self.longTapRecognizer = longTapRecognizer
+    }
+
+    override func didLoad() {
+        super.didLoad()
+        if let longTapRecognizer = self.longTapRecognizer {
+            self.view.addGestureRecognizer(longTapRecognizer)
+        }
+        self.updateLongTapEnabled()
+    }
+
+    private func updateLongTapEnabled() {
+        guard let button = self.button else {
+            self.longTapRecognizer?.isEnabled = false
+            return
+        }
+        switch button.action {
+        case .url, .openWebView, .urlAuth:
+            self.longTapRecognizer?.isEnabled = true
+        default:
+            self.longTapRecognizer?.isEnabled = false
+        }
+    }
+
+    @objc private func longTapGesture(_ recognizer: UILongPressGestureRecognizer) {
+        if let button = self.button, let longTapped = self.longTapped, recognizer.state == .began {
+            longTapped(button)
+        }
     }
     
     func update(context: AccountContext, size: CGSize, theme: PresentationTheme, wallpaperBackgroundNode: WallpaperBackgroundNode?, button: ReplyMarkupButton, message: EngineMessage) {
         self.button = button
+        self.updateLongTapEnabled()
         
         if theme !== self.theme {
             self.theme = theme
@@ -326,6 +361,9 @@ public final class ChatButtonKeyboardInputNode: ChatInputNode, UIScrollViewDeleg
                         buttonNode = ChatButtonKeyboardInputButtonNode()
                         buttonNode.titleNode.maximumNumberOfLines = 2
                         buttonNode.addTarget(self, action: #selector(self.buttonPressed(_:)), forControlEvents: [.touchUpInside])
+                        buttonNode.longTapped = { [weak self] markupButton in
+                            self?.buttonLongTapped(markupButton)
+                        }
                         self.scrollNode.addSubnode(buttonNode)
                         self.backgroundTintMaskView.addSubview(buttonNode.tintMaskView)
                         self.buttonNodes.append(buttonNode)
@@ -474,6 +512,15 @@ public final class ChatButtonKeyboardInputNode: ChatInputNode, UIScrollViewDeleg
                     }
                 }
             }
+        }
+    }
+
+    private func buttonLongTapped(_ markupButton: ReplyMarkupButton) {
+        switch markupButton.action {
+        case let .url(url), let .openWebView(url, _), let .urlAuth(url, _):
+            self.controllerInteraction.longTap(.url(url), ChatControllerInteraction.LongTapParams(message: self.message?._asMessage()))
+        default:
+            break
         }
     }
 }

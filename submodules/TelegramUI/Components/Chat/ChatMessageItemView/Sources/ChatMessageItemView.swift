@@ -929,7 +929,7 @@ open class ChatMessageItemView: ListViewItemNode, ChatMessageItemNodeProtocol {
     open func presentMessageButtonContextMenu(button: ReplyMarkupButton) {
         if let item = self.item {
             switch button.action {
-                case let .url(url):
+                case let .url(url), let .openWebView(url, _), let .urlAuth(url, _):
                     item.controllerInteraction.longTap(.url(url), ChatControllerInteraction.LongTapParams(message: item.message))
                 default:
                     break
