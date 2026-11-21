@@ -245,6 +245,7 @@ jobs:
             rm -rf "$STAGE"
             mkdir -p "$STAGE"
             ditto -x -k bazel-bin/Telegram/Telegram.ipa "$STAGE"
+            chmod -R u+w "$STAGE/Payload"
             find "$STAGE/Payload" \( -name "_CodeSignature" -o -name "SC_Info" \) -type d -prune -exec rm -rf {} +
             find "$STAGE/Payload" \( -name "embedded.mobileprovision" -o -name "CodeResources" \) -type f -delete
             python3 - "$STAGE/Payload" <<'PY'
@@ -254,6 +255,7 @@ jobs:
               b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
               b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
           }
+          stripped = 0
           for root, dirs, files in os.walk(sys.argv[1]):
               for name in files:
                   path = os.path.join(root, name)
@@ -265,8 +267,15 @@ jobs:
                   except OSError:
                       continue
                   if magic in MAGICS:
-                      subprocess.run(["codesign", "--remove-signature", path], check=True)
+                      chk = subprocess.run(["codesign", "-d", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                      if chk.returncode == 0:
+                          subprocess.run(["codesign", "--remove-signature", path], check=True)
+                          stripped += 1
+          print(f"Stripped Mach-O signatures from {stripped} binaries")
           PY
+            for app in "$STAGE/Payload"/*.app; do
+              echo "Bundle ID: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+            done
             (cd "$STAGE" && zip -qry "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER-unsigned.ipa" Payload)
           fi
           ls -lh "$RUNNER_TEMP/out"

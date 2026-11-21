@@ -1070,7 +1070,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             }
         })
         
-        let continueLaunch: (ValueBoxEncryptionParameters) -> Void = { encryptionParameters in
+        let continueLaunch: (ValueBoxEncryptionParameters) -> Void = { [self] encryptionParameters in
         let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: false, isReadOnly: false, useCaches: true, removeDatabaseOnError: true, resetLocalSecrets: {
             try resetWalletLocalSecrets()
         })
