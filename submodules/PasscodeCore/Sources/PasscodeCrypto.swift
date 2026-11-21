@@ -13,6 +13,7 @@ public enum PasscodeError: Error, Equatable {
     case staleAuthorization
     case biometricsUnavailable
     case keychain(Int32)
+    case vaultProtectionActive
 }
 
 @available(macOS 10.15, *)
@@ -68,6 +69,14 @@ enum PasscodeCrypto {
         } catch {
             throw PasscodeError.corrupted
         }
+    }
+
+    static func deriveVaultKey(from accessKey: Data, domain: String) -> Data {
+        let salt = Data("yougram.vault".utf8)
+        let info = Data(domain.utf8)
+        let prk = Data(HMAC<SHA256>.authenticationCode(for: accessKey, using: SymmetricKey(data: salt)))
+        let t1 = Data(HMAC<SHA256>.authenticationCode(for: info + Data([1]), using: SymmetricKey(data: prk)))
+        return Data(t1.prefix(32))
     }
 }
 

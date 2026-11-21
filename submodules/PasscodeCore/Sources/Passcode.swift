@@ -95,8 +95,7 @@ public final class PasscodeEnvironment: @unchecked Sendable {
             throw PasscodeError.unavailable
         }
         #if !os(macOS)
-        guard !group.hasPrefix("group."),
-              group.hasSuffix("." + configuration.appGroupIdentifier.dropFirst("group.".count)) else {
+        guard !group.hasPrefix("group.") else {
             throw PasscodeError.unavailable
         }
         #endif
@@ -116,15 +115,33 @@ final class PasscodeKeychain: PasscodeStorage {
     private let environment: PasscodeEnvironment
     init(environment: PasscodeEnvironment = .shared) { self.environment = environment }
 
-    func query(_ account: String) throws -> [String: Any] {
-        var query: [String: Any] = [
+    private func baseQuery(_ account: String) throws -> [String: Any] {
+        return [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: try self.service(account),
             kSecAttrAccount as String: account,
             kSecAttrSynchronizable as String: false
         ]
+    }
+
+    private func runKeychain(_ query: [String: Any], operation: ([String: Any]) -> OSStatus) -> OSStatus {
+        let status = operation(query)
         #if !os(macOS)
-        query[kSecAttrAccessGroup as String] = try account.hasPrefix("biometric.") ? self.environment.privateAccessGroup() : self.environment.sharedAccessGroup()
+        if status == errSecMissingEntitlement, query[kSecAttrAccessGroup as String] != nil {
+            var copy = query
+            copy.removeValue(forKey: kSecAttrAccessGroup as String)
+            return operation(copy)
+        }
+        #endif
+        return status
+    }
+
+    func query(_ account: String) throws -> [String: Any] {
+        var query = try self.baseQuery(account)
+        #if !os(macOS)
+        if let accessGroup = try? (account.hasPrefix("biometric.") ? self.environment.privateAccessGroup() : self.environment.sharedAccessGroup()) {
+            query[kSecAttrAccessGroup as String] = accessGroup
+        }
         #endif
         return query
     }
@@ -156,7 +173,10 @@ final class PasscodeKeychain: PasscodeStorage {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         if let context { query[kSecUseAuthenticationContext as String] = context }
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = self.runKeychain(query) { candidate in
+            result = nil
+            return SecItemCopyMatching(candidate as CFDictionary, &result)
+        }
         if status == errSecItemNotFound { return nil }
         if status == errSecUserCanceled { throw PasscodeError.cancelled }
         guard status == errSecSuccess, let data = result as? Data else { throw PasscodeError.keychain(status) }
@@ -186,7 +206,9 @@ final class PasscodeKeychain: PasscodeStorage {
     func write(_ data: Data, account: String, biometric: Bool = false) throws {
         let query = try self.query(account)
         if !biometric {
-            let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            let status = self.runKeychain(query) { candidate in
+                SecItemUpdate(candidate as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            }
             if status == errSecSuccess { return }
             guard status == errSecItemNotFound else { throw PasscodeError.keychain(status) }
         }
@@ -202,7 +224,9 @@ final class PasscodeKeychain: PasscodeStorage {
         } else {
             insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         }
-        let status = SecItemAdd(insert as CFDictionary, nil)
+        let status = self.runKeychain(insert) { candidate in
+            SecItemAdd(candidate as CFDictionary, nil)
+        }
         if biometric, status == errSecMissingEntitlement {
             throw PasscodeError.biometricsUnavailable
         }
@@ -210,7 +234,10 @@ final class PasscodeKeychain: PasscodeStorage {
     }
 
     func remove(_ account: String) throws {
-        let status = SecItemDelete(try self.query(account) as CFDictionary)
+        let query = try self.query(account)
+        let status = self.runKeychain(query) { candidate in
+            SecItemDelete(candidate as CFDictionary)
+        }
         guard status == errSecSuccess || status == errSecItemNotFound else { throw PasscodeError.keychain(status) }
     }
 }
@@ -262,6 +289,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
         var wrappedKey: Data?
         var unprotectedKey: Data?
         var protectionEnabled = false
+        var vaultProtectionEnabled = false
         var biometricAccount: String?
         var pendingBiometricAccount: String?
         var biometricCleanup: [String] = []
@@ -270,6 +298,31 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
             case version, id, revision, managedPasscode, kind, salt, iterations
             case wrappedKey, unprotectedKey, biometricAccount, pendingBiometricAccount, biometricCleanup
             case protectionEnabled = "walletProtection"
+            case vaultProtectionEnabled = "yougramVaultProtection"
+        }
+
+        init(id: String, managedPasscode: Bool = false, unprotectedKey: Data? = nil) {
+            self.id = id
+            self.managedPasscode = managedPasscode
+            self.unprotectedKey = unprotectedKey
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            self.id = try container.decode(String.self, forKey: .id)
+            self.revision = try container.decodeIfPresent(UInt64.self, forKey: .revision) ?? 1
+            self.managedPasscode = try container.decodeIfPresent(Bool.self, forKey: .managedPasscode) ?? false
+            self.kind = try container.decodeIfPresent(PasscodeKind.self, forKey: .kind)
+            self.salt = try container.decodeIfPresent(Data.self, forKey: .salt)
+            self.iterations = try container.decodeIfPresent(Int.self, forKey: .iterations)
+            self.wrappedKey = try container.decodeIfPresent(Data.self, forKey: .wrappedKey)
+            self.unprotectedKey = try container.decodeIfPresent(Data.self, forKey: .unprotectedKey)
+            self.protectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .protectionEnabled) ?? false
+            self.vaultProtectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .vaultProtectionEnabled) ?? false
+            self.biometricAccount = try container.decodeIfPresent(String.self, forKey: .biometricAccount)
+            self.pendingBiometricAccount = try container.decodeIfPresent(String.self, forKey: .pendingBiometricAccount)
+            self.biometricCleanup = try container.decodeIfPresent([String].self, forKey: .biometricCleanup) ?? []
         }
     }
 
@@ -386,9 +439,12 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
         }
         guard let value = try? JSONDecoder().decode(Record.self, from: data), value.version == 1, !value.id.isEmpty,
               value.revision > 0,
-              value.kind == nil || (value.salt?.count == 16 && value.iterations != nil && value.wrappedKey?.count == 60),
-              !value.protectionEnabled || (value.kind != nil && value.unprotectedKey == nil),
-              value.protectionEnabled || value.unprotectedKey?.count == 32 else {
+              value.kind == nil || (value.salt?.count == 16 && value.iterations != nil && value.wrappedKey?.count == 60) else {
+            throw PasscodeError.corrupted
+        }
+        let requiresPasscode = value.protectionEnabled || value.vaultProtectionEnabled
+        guard !requiresPasscode || (value.kind != nil && value.unprotectedKey == nil),
+              requiresPasscode || value.unprotectedKey?.count == 32 else {
             throw PasscodeError.corrupted
         }
         return value
@@ -534,7 +590,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
         guard !namespace.isEmpty else { throw PasscodeError.authenticationRequired }
         return try self.serialized {
             let record = try self.existingOrCreate()
-            guard !record.protectionEnabled, let key = record.unprotectedKey else { throw PasscodeError.authenticationRequired }
+            guard !record.protectionEnabled, !record.vaultProtectionEnabled, let key = record.unprotectedKey else { throw PasscodeError.authenticationRequired }
             return PasscodeSession(credentialId: record.id, revision: record.revision, key: key, scope: .resource(namespace: namespace), lifetime: lifetime)
         }
     }
@@ -608,9 +664,9 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
             guard record.kind != nil else {
                 throw PasscodeError.authenticationRequired
             }
-            record.unprotectedKey = enabled ? nil : try session.withKey { $0 }
+            record.unprotectedKey = (enabled || record.vaultProtectionEnabled) ? nil : try session.withKey { $0 }
             record.protectionEnabled = enabled
-            if !enabled, let account = record.biometricAccount {
+            if !enabled, !record.vaultProtectionEnabled, let account = record.biometricAccount {
                 record.biometricCleanup.append(account)
                 record.biometricAccount = nil
             }
@@ -620,10 +676,70 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
         }
     }
 
+    // Yougram: bind App Passcode Lock so it cannot be disabled or store unprotectedKey while Local Encryption relies on it.
+    public func isVaultProtectionEnabled() -> Bool {
+        return (try? self.serialized {
+            return (try self.load())?.vaultProtectionEnabled ?? false
+        }) ?? false
+    }
+
+    public func currentPasscodeKind() -> PasscodeKind? {
+        return (try? self.serialized {
+            return (try self.load())?.kind
+        }) ?? nil
+    }
+
+    public func setVaultProtectionEnabled(_ enabled: Bool, session: PasscodeSession) throws {
+        guard session.authentication == .passcode else {
+            throw PasscodeError.authenticationRequired
+        }
+        try self.serialized {
+            var record = try self.validatedRecord(session)
+            if enabled {
+                guard record.kind != nil else {
+                    throw PasscodeError.authenticationRequired
+                }
+                record.vaultProtectionEnabled = true
+                record.unprotectedKey = nil
+            } else {
+                record.vaultProtectionEnabled = false
+                if !record.protectionEnabled {
+                    record.unprotectedKey = try session.withKey { $0 }
+                }
+            }
+            record.revision &+= 1
+            try self.commit(record, retaining: session)
+        }
+    }
+
+    public func withVaultKey<T>(session: PasscodeSession, domain: String, _ body: (Data) throws -> T) throws -> T {
+        guard !domain.isEmpty else {
+            throw PasscodeError.authenticationRequired
+        }
+        guard session.authentication == .passcode || session.authentication == .biometrics else {
+            throw PasscodeError.authenticationRequired
+        }
+        try self.serialized {
+            _ = try self.validatedRecord(session, requireAvailable: false)
+        }
+        return try session.withKey { accessKey in
+            var derived = PasscodeCrypto.deriveVaultKey(from: accessKey, domain: domain)
+            defer {
+                if !derived.isEmpty {
+                    derived.resetBytes(in: 0 ..< derived.count)
+                }
+            }
+            return try body(derived)
+        }
+    }
+
     public func disablePasscode(session: PasscodeSession) throws {
         try self.requirePasscodeManagement(session)
         try self.serialized {
             var record = try self.validatedRecord(session)
+            guard !record.vaultProtectionEnabled else {
+                throw PasscodeError.vaultProtectionActive
+            }
             record.unprotectedKey = try session.withKey { $0 }
             record.kind = nil
             record.salt = nil
@@ -677,7 +793,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
         let account = "biometric." + UUID().uuidString
         try self.serialized {
             var record = try self.validatedRecord(session)
-            guard record.protectionEnabled else { throw PasscodeError.authenticationRequired }
+            guard record.protectionEnabled || record.vaultProtectionEnabled else { throw PasscodeError.authenticationRequired }
             try self.cleanupBiometrics(record: &record)
             record.pendingBiometricAccount = account
             try self.save(record, notify: false)
@@ -711,7 +827,7 @@ public final class PasscodeCredentialStore: @unchecked Sendable {
     public func authenticateBiometrics(context: LAContext, scope: PasscodeSession.Scope, lifetime: PasscodeSession.Lifetime = .standard) throws -> PasscodeSession {
         guard case let .resource(namespace) = scope, !namespace.isEmpty else { throw PasscodeError.authenticationRequired }
         let record = try self.serialized { () throws -> Record in
-            guard let record = try self.load(), record.protectionEnabled, record.biometricAccount != nil else { throw PasscodeError.biometricsUnavailable }
+            guard let record = try self.load(), record.protectionEnabled || record.vaultProtectionEnabled, record.biometricAccount != nil else { throw PasscodeError.biometricsUnavailable }
             return record
         }
         guard let key = try self.storage.read(record.biometricAccount!, context: context), key.count == 32 else { throw PasscodeError.biometricsUnavailable }

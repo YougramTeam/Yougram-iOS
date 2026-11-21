@@ -539,6 +539,17 @@ public func passcodeOptionsController(context: AccountContext, focusOnItemTag: P
             return
         }
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        // Yougram: block disabling App Passcode Lock while Local Encryption is bound to it.
+        if PasscodeCredentialStore.shared.isVaultProtectionEnabled() {
+            let blockedAlert = textAlertController(
+                context: context,
+                title: presentationData.strings.Yougram_Encryption_PasscodeInUseTitle,
+                text: presentationData.strings.Yougram_Encryption_PasscodeInUseText,
+                actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+            )
+            presentControllerImpl?(blockedAlert, nil)
+            return
+        }
         let alert = textAlertController(context: context, title: presentationData.strings.PasscodeSettings_TurnPasscodeOff, text: current.enabled ? presentationData.strings.PasscodeSettings_TurnOffWalletProtectionWarning : presentationData.strings.PasscodeSettings_TurnPasscodeOff, actions: [
             TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
             TextAlertAction(type: .destructiveAction, title: presentationData.strings.PasscodeSettings_TurnPasscodeOff, action: {

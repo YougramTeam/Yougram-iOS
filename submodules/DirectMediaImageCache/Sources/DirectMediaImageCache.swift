@@ -84,18 +84,9 @@ private func storeImage(context: DrawingContext, mediaBox: MediaBox, resourceId:
         }
     }
     let path = mediaBox.cachedRepresentationPathForId(resourceId.stringRepresentation, representationId: representationId, keepDuration: .general)
+    let originalName = "\(resourceId.stringRepresentation):\(representationId)"
     
     if context.size.width <= 70.0 && context.size.height <= 70.0 {
-        guard let file = ManagedFile(queue: nil, path: path, mode: .readwrite) else {
-            return nil
-        }
-        var header: UInt32 = 0xcaf2
-        let _ = file.write(&header, count: 4)
-        var width: UInt16 = UInt16(context.size.width)
-        let _ = file.write(&width, count: 2)
-        var height: UInt16 = UInt16(context.size.height)
-        let _ = file.write(&height, count: 2)
-
         var source = vImage_Buffer()
         source.width = UInt(context.size.width)
         source.height = UInt(context.size.height)
@@ -107,16 +98,22 @@ private func storeImage(context: DrawingContext, mediaBox: MediaBox, resourceId:
         target.height = UInt(context.size.height)
         target.rowBytes = Int(context.size.width) * 2
         let targetLength = Int(target.height) * target.rowBytes
-        let targetData = malloc(targetLength)!
-        defer {
-            free(targetData)
+
+        var header: UInt32 = 0xcaf2
+        var width: UInt16 = UInt16(context.size.width)
+        var height: UInt16 = UInt16(context.size.height)
+
+        var payload = Data(count: 8 + targetLength)
+        payload.withUnsafeMutableBytes { rawBuf in
+            guard let base = rawBuf.baseAddress else { return }
+            memcpy(base, &header, 4)
+            memcpy(base.advanced(by: 4), &width, 2)
+            memcpy(base.advanced(by: 6), &height, 2)
+            target.data = base.advanced(by: 8)
+            vImageConvert_BGRA8888toRGB565(&source, &target, vImage_Flags(kvImageDoNotTile))
         }
-        target.data = targetData
 
-        vImageConvert_BGRA8888toRGB565(&source, &target, vImage_Flags(kvImageDoNotTile))
-
-        let _ = file.write(targetData, count: targetLength)
-        if let pathData = path.data(using: .utf8), let size = file.getSize() {
+        if let size = mediaBox.writeEncryptedOrRawData(payload, originalName: originalName, toPath: path), let pathData = path.data(using: .utf8) {
             mediaBox.cacheStorageBox.update(id: pathData, size: size)
         }
 
@@ -125,9 +122,8 @@ private func storeImage(context: DrawingContext, mediaBox: MediaBox, resourceId:
         guard let image = context.generateImage(), let resultData = image.jpegData(compressionQuality: 0.7) else {
             return nil
         }
-        let _ = try? resultData.write(to: URL(fileURLWithPath: path))
-        if let pathData = path.data(using: .utf8) {
-            mediaBox.cacheStorageBox.update(id: pathData, size: Int64(resultData.count))
+        if let size = mediaBox.writeEncryptedOrRawData(resultData, originalName: originalName, toPath: path), let pathData = path.data(using: .utf8) {
+            mediaBox.cacheStorageBox.update(id: pathData, size: size)
         }
         return image
     }
@@ -257,6 +253,12 @@ public final class DirectMediaImageCache {
         return TelegramEngine(account: self.account).resources.cachedRepresentationPath(id: resourceId.stringRepresentation, representationId: representationId, keepDuration: .general)
     }
 
+    // Yougram: decrypt cached DirectMediaImageCache representation when local encryption is active.
+    private func readCachedData(resourceId: MediaResourceId, imageType: ImageType) -> Data? {
+        let path = self.getCachePath(resourceId: resourceId, imageType: imageType)
+        return self.account.postbox.mediaBox.readEncryptedOrRawData(atPath: path)
+    }
+
     private func getLoadSignal(width: Int, aspectRatio: CGFloat, userLocation: MediaResourceUserLocation, userContentType: MediaResourceUserContentType, resource: MediaResourceReference, resourceSizeLimit: Int64) -> Signal<UIImage?, NoError>? {
         return Signal { subscriber in
             let fetch = TelegramEngine(account: self.account).resources.fetch(
@@ -381,19 +383,17 @@ public final class DirectMediaImageCache {
         
         var resultImage: UIImage?
         for otherWidth in possibleWidths.reversed() {
-            if otherWidth == width {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+            if let data = self.readCachedData(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)), let image = loadImage(data: data) {
+                if otherWidth == width {
                     return GetMediaResult(image: image, blurredImage: blurredImage, loadSignal: nil)
-                }
-            } else {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+                } else {
                     resultImage = image
                 }
             }
         }
 
         if resultImage == nil {
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .blurredThumbnail))), let image = loadImage(data: data) {
+            if let data = self.readCachedData(resourceId: resource.resource.resource.id, imageType: .blurredThumbnail), let image = loadImage(data: data) {
                 resultImage = image
             } else if let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data) {
                 if let blurredImageValue = generateBlurredThumbnail(image: image) {
@@ -480,19 +480,17 @@ public final class DirectMediaImageCache {
         
         var resultImage: UIImage?
         for otherWidth in possibleWidths.reversed() {
-            if otherWidth == width {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+            if let data = self.readCachedData(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)), let image = loadImage(data: data) {
+                if otherWidth == width {
                     return GetMediaResult(image: image, blurredImage: blurredImage, loadSignal: nil)
-                }
-            } else {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+                } else {
                     resultImage = image
                 }
             }
         }
 
         if resultImage == nil {
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .blurredThumbnail))), let image = loadImage(data: data) {
+            if let data = self.readCachedData(resourceId: resource.resource.resource.id, imageType: .blurredThumbnail), let image = loadImage(data: data) {
                 resultImage = image
             } else if let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data) {
                 if let blurredImageValue = generateBlurredThumbnail(image: image) {
@@ -513,12 +511,12 @@ public final class DirectMediaImageCache {
         }
         
         var resultImage: UIImage?
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.id, imageType: .square(width: size, aspectRatio: 1.0)))), let image = loadImage(data: data) {
+        if let data = self.readCachedData(resourceId: resource.resource.id, imageType: .square(width: size, aspectRatio: 1.0)), let image = loadImage(data: data) {
             return GetMediaResult(image: image, blurredImage: blurredImage, loadSignal: nil)
         }
 
         if resultImage == nil {
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.id, imageType: .blurredThumbnail))), let image = loadImage(data: data) {
+            if let data = self.readCachedData(resourceId: resource.resource.id, imageType: .blurredThumbnail), let image = loadImage(data: data) {
                 resultImage = image
             } else if let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data) {
                 if let blurredImageValue = generateBlurredThumbnail(image: image) {

@@ -28,14 +28,16 @@ struct PeerInputActivityRecord: Equatable {
 
 private final class ManagedLocalTypingActivitiesContext {
     private var disposables: [PeerActivitySpace: (PeerInputActivityRecord, MetaDisposable)] = [:]
+    private var sentSpaces: Set<PeerActivitySpace> = []
     
-    func update(activities: [PeerActivitySpace: [(PeerId, PeerInputActivityRecord)]]) -> (start: [(PeerActivitySpace, PeerInputActivityRecord?, MetaDisposable)], dispose: [MetaDisposable]) {
+    func update(activities: [PeerActivitySpace: [(PeerId, PeerInputActivityRecord)]]) -> (start: [(PeerActivitySpace, PeerInputActivityRecord?, MetaDisposable)], dispose: [MetaDisposable], cancelSpaces: [PeerActivitySpace]) {
         var start: [(PeerActivitySpace, PeerInputActivityRecord?, MetaDisposable)] = []
         var dispose: [MetaDisposable] = []
+        var cancelSpaces: [PeerActivitySpace] = []
         
         var validPeerIds = Set<PeerActivitySpace>()
         for (peerId, record) in activities {
-            if let activity = record.first?.1 {
+            if let activity = record.first?.1, !yougramGhostHidesActivity(activity.activity) {
                 validPeerIds.insert(peerId)
                 
                 let currentRecord = self.disposables[peerId]
@@ -46,6 +48,7 @@ private final class ManagedLocalTypingActivitiesContext {
                     
                     let disposable = MetaDisposable()
                     start.append((peerId, activity, disposable))
+                    self.sentSpaces.insert(peerId)
                     
                     self.disposables[peerId] = (activity, disposable)
                 }
@@ -62,9 +65,12 @@ private final class ManagedLocalTypingActivitiesContext {
         for peerId in removePeerIds {
             dispose.append(self.disposables[peerId]!.1)
             self.disposables.removeValue(forKey: peerId)
+            if self.sentSpaces.remove(peerId) != nil && !YougramCoreOptions.ghostMode.hidesAnyActivity {
+                cancelSpaces.append(peerId)
+            }
         }
         
-        return (start, dispose)
+        return (start, dispose, cancelSpaces)
     }
     
     func dispose() {
@@ -72,6 +78,7 @@ private final class ManagedLocalTypingActivitiesContext {
             record.1.dispose()
         }
         self.disposables.removeAll()
+        self.sentSpaces.removeAll()
     }
 }
 
@@ -79,12 +86,20 @@ func managedLocalTypingActivities(activities: Signal<[PeerActivitySpace: [(PeerI
     return Signal { subscriber in
         let context = Atomic(value: ManagedLocalTypingActivitiesContext())
         let disposable = activities.start(next: { activities in
-            let (start, dispose) = context.with { context in
+            let (start, dispose, cancelSpaces) = context.with { context in
                 return context.update(activities: activities)
             }
             
             for disposable in dispose {
                 disposable.dispose()
+            }
+            
+            for peerId in cancelSpaces {
+                var threadId: Int64?
+                if case let .thread(id) = peerId.category {
+                    threadId = id
+                }
+                let _ = requestActivity(postbox: postbox, network: network, accountPeerId: accountPeerId, peerId: peerId.peerId, threadId: threadId, activity: nil).start()
             }
             
             for (peerId, activity, disposable) in start {

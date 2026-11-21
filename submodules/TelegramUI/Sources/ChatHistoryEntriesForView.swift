@@ -88,7 +88,8 @@ func chatHistoryEntriesForView(
     adMessage: Message?,
     dynamicAdMessages: [Message],
     isMusicPlaylist: Bool,
-    pinToTopStableId: EngineMessage.StableId?
+    pinToTopStableId: EngineMessage.StableId?,
+    hiddenBlockedPeerIds: Set<PeerId> = Set()
 ) -> ([ChatHistoryEntry], ChatHistoryEntriesForViewState) {
     var currentState = currentState
     
@@ -179,6 +180,14 @@ func chatHistoryEntriesForView(
         }
         
         if pendingRemovedMessages.contains(message.id) {
+            continue
+        }
+        // Yougram: hide messages from blocked users in shared groups, channels, and threads.
+        if !hiddenBlockedPeerIds.isEmpty,
+           let authorId = message.author?.id,
+           authorId != context.account.peerId,
+           authorId != location.peerId,
+           hiddenBlockedPeerIds.contains(authorId) {
             continue
         }
         

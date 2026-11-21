@@ -556,6 +556,15 @@ public extension TelegramEngine {
             return self.account.postbox.mediaBox.basePath
         }
 
+        // Yougram: vault state and authenticated cache reads without leaking Postbox outside TelegramCore.
+        public var isLocalEncryptionActive: Bool {
+            return PostboxLocalEncryption.isActive
+        }
+
+        public func readCachedRepresentationData(atPath path: String) -> Data? {
+            return self.account.postbox.mediaBox.readEncryptedOrRawData(atPath: path)
+        }
+
         public func resourcePath(resource: EngineMediaResource) -> String {
             return self.account.postbox.mediaBox.resourcePath(resource._asResource())
         }

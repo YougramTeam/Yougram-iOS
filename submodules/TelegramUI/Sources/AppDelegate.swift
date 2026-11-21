@@ -310,11 +310,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             return existingSession
         }
         
-        let baseAppBundleId = Bundle.main.bundleIdentifier!
-        let appGroupName = "group.\(baseAppBundleId)"
-
+        let baseAppBundleId = Bundle.main.bundleIdentifier ?? "com.yougramteam.yougram"
         let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
-        configuration.sharedContainerIdentifier = appGroupName
+        if let appGroupName = self.resolvedAppGroupIdentifier ?? BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) {
+            configuration.sharedContainerIdentifier = appGroupName
+        }
         configuration.isDiscretionary = false
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
         self.urlSessions.append(session)
@@ -344,6 +344,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     private let regularDeviceToken = Promise<Data?>(nil)
     
     private var recaptchaClientsBySiteKey: [String: Promise<RecaptchaClient>] = [:]
+    private var prelaunchUnlockController: YougramVaultUnlockController?
+    private var resolvedAppGroupIdentifier: String?
+    private var pendingLaunchAlert: UIAlertController?
         
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         precondition(!testIsLaunched)
@@ -563,12 +566,14 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
         
-        let baseAppBundleId = Bundle.main.bundleIdentifier!
-        let appGroupName = "group.\(baseAppBundleId)"
-        try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
+        let baseAppBundleId = Bundle.main.bundleIdentifier ?? "com.yougramteam.yougram"
+        let resolvedAppGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId)
+        self.resolvedAppGroupIdentifier = resolvedAppGroupName
+        let appGroupName = resolvedAppGroupName ?? "group.\(baseAppBundleId)"
+        try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
             BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
         })
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
+        let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
         
         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
         self.buildConfig = buildConfig
@@ -691,11 +696,6 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             networkEngineFactory: RustNetworkEngineFactory()
         )
         
-        guard let appGroupUrl = maybeAppGroupUrl else {
-            self.mainWindow?.presentNative(UIAlertController(title: nil, message: "Error 2", preferredStyle: .alert))
-            return true
-        }
-        
         var isDebugConfiguration = false
         #if DEBUG
         isDebugConfiguration = true
@@ -721,14 +721,23 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         } else {
             rootPath = rootPathForBasePath(appGroupUrl.path)
         }
-        if !isUITest {
+
+        // Yougram: purge any stale ephemeral decrypted media from previous session immediately on cold launch.
+        YougramLocalEncryptionBridge.purgeEphemeralCache()
+        let isVaultLockedAtLaunch = !isUITest && YougramVaultStore.shared.isEnabled(rootPath: rootPath)
+        if !isUITest && !isVaultLockedAtLaunch {
             performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
         }
-        
-        let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-        let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
-        
-        TempBox.initializeShared(basePath: rootPath, processType: "app", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+
+        let initialEncryptionParameters: ValueBoxEncryptionParameters?
+        if isVaultLockedAtLaunch {
+            initialEncryptionParameters = nil
+            TempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "app", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        } else {
+            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+            initialEncryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+            TempBox.initializeShared(basePath: rootPath, processType: "app", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        }
         
         let writeAbilityTestFile = TempBox.shared.tempFile(fileName: "test.bin")
         var writeAbilityTestSuccess = true
@@ -759,7 +768,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             alertController.addAction(UIAlertAction(title: "OK", style: .default, handler: { _ in
                 preconditionFailure()
             }))
-            self.mainWindow?.presentNative(alertController)
+            if self.window?.windowScene != nil {
+                self.mainWindow?.presentNative(alertController)
+            } else {
+                self.pendingLaunchAlert = alertController
+            }
             
             return true
         }
@@ -774,29 +787,38 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         for item in legacyLogs {
             let _ = try? FileManager.default.removeItem(atPath: "\(rootPath)/\(item)")
         }
-        
-        let logsPath = rootPath + "/logs/app-logs"
-        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-        Logger.setSharedLogger(Logger(rootPath: rootPath, basePath: logsPath))
+
+        if isVaultLockedAtLaunch {
+            LoggingSettings.defaultSettings = LoggingSettings(logToFile: false, logToConsole: false, redactSensitiveData: true)
+            let ephemeralLogPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+            Logger.setSharedLogger(Logger(rootPath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), basePath: ephemeralLogPath))
+            Logger.shared.logToFile = false
+        } else {
+            let logsPath = rootPath + "/logs/app-logs"
+            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+            Logger.setSharedLogger(Logger(rootPath: rootPath, basePath: logsPath))
+        }
 
         setManagedAudioSessionLogger({ s in
             Logger.shared.log("ManagedAudioSession", s)
             Logger.shared.shortLog("ManagedAudioSession", s)
         })
-        
-        if let contents = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: rootPath + "/accounts-metadata"), includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) {
-            for url in contents {
-                Logger.shared.log("App \(self.episodeId)", "metadata: \(url.path)")
+
+        if !isVaultLockedAtLaunch {
+            if let contents = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: rootPath + "/accounts-metadata"), includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) {
+                for url in contents {
+                    Logger.shared.log("App \(self.episodeId)", "metadata: \(url.path)")
+                }
             }
-        }
-        
-        if let contents = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: rootPath), includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) {
-            for url in contents {
-                Logger.shared.log("App \(self.episodeId)", "root: \(url.path)")
-                if url.lastPathComponent.hasPrefix("account-") {
-                    if let subcontents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) {
-                        for suburl in subcontents {
-                            Logger.shared.log("App \(self.episodeId)", "account \(url.lastPathComponent): \(suburl.path)")
+            
+            if let contents = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: rootPath), includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) {
+                for url in contents {
+                    Logger.shared.log("App \(self.episodeId)", "root: \(url.path)")
+                    if url.lastPathComponent.hasPrefix("account-") {
+                        if let subcontents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) {
+                            for suburl in subcontents {
+                                Logger.shared.log("App \(self.episodeId)", "account \(url.lastPathComponent): \(suburl.path)")
+                            }
                         }
                     }
                 }
@@ -1048,6 +1070,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             }
         })
         
+        let continueLaunch: (ValueBoxEncryptionParameters) -> Void = { encryptionParameters in
         let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: false, isReadOnly: false, useCaches: true, removeDatabaseOnError: true, resetLocalSecrets: {
             try resetWalletLocalSecrets()
         })
@@ -1088,7 +1111,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 }
             })
 
-            return true
+            return
         }
 
         let pushRegistry = PKPushRegistry(queue: .main)
@@ -1148,6 +1171,13 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                     }
                 }
             }, appDelegate: self, testingEnvironment: isUITest)
+            YougramLocalEncryptionCoordinator.shared.configure(
+                rootPath: rootPath,
+                appGroupPath: appGroupUrl.path,
+                baseAppBundleId: baseAppBundleId,
+                window: self.window,
+                sharedContext: sharedContext
+            )
             navigationBarOverflowMenuPresenter = { [weak sharedContext] sourceView, items in
                 guard let sharedContext, let mainWindow = sharedContext.mainWindow else {
                     return
@@ -1271,7 +1301,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         }
         self.sharedContextPromise.set(sharedContextSignal
         |> mapToSignal { sharedApplicationContext, loggingSettings -> Signal<SharedApplicationContext, NoError> in
-            Logger.shared.logToFile = loggingSettings.logToFile
+            // Yougram: keep file logging disabled when local encryption is active.
+            Logger.shared.logToFile = loggingSettings.logToFile && !YougramLocalEncryptionBridge.isActive
             Logger.shared.logToConsole = loggingSettings.logToConsole
             Logger.shared.redactSensitiveData = loggingSettings.redactSensitiveData
             
@@ -1630,37 +1661,39 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         
         if #available(iOS 13.0, *) {
             let cleanupTaskId = "\(baseAppBundleId).cleanup"
-            
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: cleanupTaskId, using: DispatchQueue.main) { task in
-                Logger.shared.log("App \(self.episodeId)", "Executing cleanup task")
-                
-                let disposable = self.runCacheReindexTasks(lowImpact: true, completion: {
-                    Logger.shared.log("App \(self.episodeId)", "Completed cleanup task")
+            let permittedIds = (Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String]) ?? []
+            if permittedIds.contains(cleanupTaskId) {
+                BGTaskScheduler.shared.register(forTaskWithIdentifier: cleanupTaskId, using: DispatchQueue.main) { task in
+                    Logger.shared.log("App \(self.episodeId)", "Executing cleanup task")
                     
-                    task.setTaskCompleted(success: true)
+                    let disposable = self.runCacheReindexTasks(lowImpact: true, completion: {
+                        Logger.shared.log("App \(self.episodeId)", "Completed cleanup task")
+                        
+                        task.setTaskCompleted(success: true)
+                    })
+                    
+                    task.expirationHandler = {
+                        disposable.dispose()
+                        task.setTaskCompleted(success: false)
+                    }
+                }
+                
+                BGTaskScheduler.shared.getPendingTaskRequests(completionHandler: { tasks in
+                    if tasks.contains(where: { $0.identifier == cleanupTaskId }) {
+                        Logger.shared.log("App \(self.episodeId)", "Already have a cleanup task pending")
+                        return
+                    }
+                    let request = BGProcessingTaskRequest(identifier: cleanupTaskId)
+                    request.requiresExternalPower = true
+                    request.requiresNetworkConnectivity = false
+                    
+                    do {
+                        try BGTaskScheduler.shared.submit(request)
+                    } catch let e {
+                        Logger.shared.log("App \(self.episodeId)", "Error submitting background task request: \(e)")
+                    }
                 })
-                
-                task.expirationHandler = {
-                    disposable.dispose()
-                    task.setTaskCompleted(success: false)
-                }
             }
-            
-            BGTaskScheduler.shared.getPendingTaskRequests(completionHandler: { tasks in
-                if tasks.contains(where: { $0.identifier == cleanupTaskId }) {
-                    Logger.shared.log("App \(self.episodeId)", "Already have a cleanup task pending")
-                    return
-                }
-                let request = BGProcessingTaskRequest(identifier: cleanupTaskId)
-                request.requiresExternalPower = true
-                request.requiresNetworkConnectivity = false
-                
-                do {
-                    try BGTaskScheduler.shared.submit(request)
-                } catch let e {
-                    Logger.shared.log("App \(self.episodeId)", "Error submitting background task request: \(e)")
-                }
-            })
         }
         
         let timestamp = Int(CFAbsoluteTimeGetCurrent())
@@ -1768,7 +1801,105 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 }))
             }
         })
-                
+        }
+
+        if isVaultLockedAtLaunch, let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath) {
+            let dismissUnlockGate: () -> Void = { [weak self] in
+                guard let self, let unlockVC = self.prelaunchUnlockController else {
+                    return
+                }
+                unlockVC.willMove(toParent: nil)
+                unlockVC.view.removeFromSuperview()
+                unlockVC.removeFromParent()
+                self.prelaunchUnlockController = nil
+            }
+            let unlockController = YougramVaultUnlockController(
+                rootPath: rootPath,
+                appGroupPath: appGroupUrl.path,
+                manifest: manifest,
+                onUnlocked: { [weak self] masterKey in
+                    guard let self else { return }
+                    dismissUnlockGate()
+                    YougramLocalEncryptionCoordinator.shared.completePendingMigrationIfNeeded(
+                        rootPath: rootPath,
+                        masterKey: masterKey,
+                        baseAppBundleId: baseAppBundleId,
+                        window: self.window
+                    ) {
+                        if let vaultEncryptionParameters = YougramLocalEncryptionBridge.activePostboxEncryptionParameters() {
+                            YougramLocalEncryptionBridge.wipeAuxiliaryPlaintextArtifacts(rootPath: rootPath, appGroupPath: appGroupUrl.path)
+                            YougramLocalEncryptionCoordinator.purgeSystemCachesAndIndexes()
+                            continueLaunch(vaultEncryptionParameters)
+                        } else {
+                            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+                            let standardParameters = ValueBoxEncryptionParameters(
+                                forceEncryptionIfNoSet: false,
+                                key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!,
+                                salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!
+                            )
+                            TempBox.shared.reconfigureBasePath(rootPath)
+                            continueLaunch(standardParameters)
+                        }
+                    }
+                },
+                onWipedAndReset: { [weak self] in
+                    guard let self else { return }
+                    dismissUnlockGate()
+                    let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+                    let standardParameters = ValueBoxEncryptionParameters(
+                        forceEncryptionIfNoSet: false,
+                        key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!,
+                        salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!
+                    )
+                    TempBox.shared.reconfigureBasePath(rootPath)
+                    continueLaunch(standardParameters)
+                }
+            )
+            self.prelaunchUnlockController = unlockController
+            if let rootVC = window.rootViewController {
+                rootVC.addChild(unlockController)
+                unlockController.view.frame = rootVC.view.bounds
+                unlockController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                rootVC.view.addSubview(unlockController.view)
+                unlockController.didMove(toParent: rootVC)
+            }
+            window.makeKeyAndVisible()
+        } else if isVaultLockedAtLaunch {
+            let recoveryController = UIAlertController(
+                title: "Encrypted Data Unavailable",
+                message: "Your local vault metadata is missing or damaged. Erase all local data to start fresh.",
+                preferredStyle: .alert
+            )
+            recoveryController.addAction(UIAlertAction(title: "Erase All Data", style: .destructive, handler: { [weak self] _ in
+                guard let self else { return }
+                YougramVaultStore.shared.cryptoShredAndWipeAllData(rootPath: rootPath, appGroupPath: appGroupUrl.path)
+                try? resetWalletLocalSecrets()
+                YougramLocalEncryptionCoordinator.purgeSystemCachesAndIndexes()
+                let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+                let standardParameters = ValueBoxEncryptionParameters(
+                    forceEncryptionIfNoSet: false,
+                    key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!,
+                    salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!
+                )
+                TempBox.shared.reconfigureBasePath(rootPath)
+                continueLaunch(standardParameters)
+            }))
+            window.makeKeyAndVisible()
+            DispatchQueue.main.async {
+                window.rootViewController?.present(recoveryController, animated: true, completion: nil)
+            }
+        } else if let initialEncryptionParameters {
+            continueLaunch(initialEncryptionParameters)
+        } else {
+            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+            let fallbackParameters = ValueBoxEncryptionParameters(
+                forceEncryptionIfNoSet: false,
+                key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!,
+                salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!
+            )
+            continueLaunch(fallbackParameters)
+        }
+
         return true
     }
     
@@ -1809,6 +1940,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
 
         self.mainWindow?.updateDeviceMetrics()
         self.window?.makeKeyAndVisible()
+        if let pendingLaunchAlert = self.pendingLaunchAlert {
+            self.pendingLaunchAlert = nil
+            self.mainWindow?.presentNative(pendingLaunchAlert)
+        }
 
         for context in connectionOptions.urlContexts {
             let url = context.url
@@ -2060,6 +2195,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
 
     func handleDidEnterBackground() {
+        // Yougram: purge ephemeral decrypted media cache on backgrounding and record timestamp for Auto-Lock.
+        YougramLocalEncryptionCoordinator.shared.handleDidEnterBackground()
+
         let _ = (self.sharedContextPromise.get()
         |> take(1)
         |> deliverOnMainQueue).start(next: { sharedApplicationContext in
@@ -2107,6 +2245,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
 
     func handleWillEnterForeground() {
+        YougramLocalEncryptionCoordinator.shared.handleWillEnterForegroundOrBecomeActive()
+
         if self.isActiveValue {
             self.isInForegroundValue = true
             self.isInForegroundPromise.set(true)
@@ -2139,6 +2279,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
 
     func handleDidBecomeActive() {
+        YougramLocalEncryptionCoordinator.shared.handleWillEnterForegroundOrBecomeActive()
+
         self.isInForegroundValue = true
         self.isInForegroundPromise.set(true)
         self.isActiveValue = true
@@ -2169,6 +2311,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     
     func applicationWillTerminate(_ application: UIApplication) {
         Logger.shared.log("App \(self.episodeId)", "terminating")
+        YougramLocalEncryptionCoordinator.shared.handleWillTerminate()
     }
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

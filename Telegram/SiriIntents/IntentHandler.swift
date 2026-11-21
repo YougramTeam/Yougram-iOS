@@ -148,36 +148,42 @@ class DefaultIntentHandler: INExtension, INSendMessageIntentHandling, INSearchFo
         let apiHash: String = buildConfig.apiHash
         let languagesCategory = "ios"
         
-        let appGroupName = "group.\(baseAppBundleId)"
-        try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-        
-        guard let appGroupUrl = maybeAppGroupUrl else {
-            return
-        }
+        let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+        try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
+        let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
         
         self.appGroupUrl = appGroupUrl
         
         let rootPath = rootPathForBasePath(appGroupUrl.path)
-        performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
-        
         self.rootPath = rootPath
-        
-        TempBox.initializeShared(basePath: rootPath, processType: "siri", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
-        
-        let logsPath = rootPath + "/logs/siri-logs"
-        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-        
-        setupSharedLogger(rootPath: logsPath, path: logsPath)
-        
+
+        let encryptionParameters: ValueBoxEncryptionParameters
+        switch resolveExtensionEncryptionParameters(rootPath: rootPath) {
+        case .disabled:
+            performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
+            TempBox.initializeShared(basePath: rootPath, processType: "siri", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            let logsPath = rootPath + "/logs/siri-logs"
+            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+            setupSharedLogger(rootPath: logsPath, path: logsPath)
+            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+            encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+        case let .unlocked(params):
+            TempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "siri", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            let logsPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+            setupSharedLogger(rootPath: logsPath, path: logsPath)
+            Logger.shared.logToFile = false
+            encryptionParameters = params
+        case .locked:
+            self.allAccounts.set(.single([]))
+            self.accountPromise.set(.single(nil))
+            return
+        }
+
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
         
         initializeAccountManagement()
         let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: true, isReadOnly: false, useCaches: false, removeDatabaseOnError: false)
         self.accountManager = accountManager
-        
-        let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-        let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
         self.encryptionParameters = encryptionParameters
         
         // One read of the account records serves both the account list and the choice of the
@@ -255,7 +261,7 @@ class DefaultIntentHandler: INExtension, INSendMessageIntentHandling, INSearchFo
                             |> deliverOnMainQueue
                             |> map { settings -> Account in
                                 accountCache = account
-                                Logger.shared.logToFile = settings.logging.logToFile
+                                Logger.shared.logToFile = settings.logging.logToFile && !YougramLocalEncryptionBridge.isActive
                                 Logger.shared.logToConsole = settings.logging.logToConsole
                                 
                                 Logger.shared.redactSensitiveData = settings.logging.redactSensitiveData
@@ -277,6 +283,9 @@ class DefaultIntentHandler: INExtension, INSendMessageIntentHandling, INSearchFo
         self.resolvePersonsDisposable.dispose()
         self.actionDisposable.dispose()
         self.searchDisposable.dispose()
+        if YougramLocalEncryptionBridge.isActive {
+            purgeExtensionEphemeralCache()
+        }
     }
     
     enum ResolveResult {
@@ -990,31 +999,37 @@ private final class WidgetIntentHandler {
         
         let baseAppBundleId = String(appBundleIdentifier[..<lastDotRange.lowerBound])
         
-        let appGroupName = "group.\(baseAppBundleId)"
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-        
-        guard let appGroupUrl = maybeAppGroupUrl else {
-            return
-        }
+        let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+        try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
+        let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
         
         self.appGroupUrl = appGroupUrl
         
         let rootPath = rootPathForBasePath(appGroupUrl.path)
-        performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
-        
         self.rootPath = rootPath
-        
-        TempBox.initializeShared(basePath: rootPath, processType: "siri", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
-        
-        let logsPath = rootPath + "/logs/siri-logs"
-        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-        
-        setupSharedLogger(rootPath: rootPath, path: logsPath)
+
+        let encryptionParameters: ValueBoxEncryptionParameters
+        switch resolveExtensionEncryptionParameters(rootPath: rootPath) {
+        case .disabled:
+            performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
+            TempBox.initializeShared(basePath: rootPath, processType: "siri", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            let logsPath = rootPath + "/logs/siri-logs"
+            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+            setupSharedLogger(rootPath: rootPath, path: logsPath)
+            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+            encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+        case let .unlocked(params):
+            TempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "siri", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            let logsPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+            setupSharedLogger(rootPath: logsPath, path: logsPath)
+            Logger.shared.logToFile = false
+            encryptionParameters = params
+        case .locked:
+            self.allAccounts.set(.single([]))
+            return
+        }
         
         initializeAccountManagement()
-        
-        let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-        let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
         self.encryptionParameters = encryptionParameters
         
         let view = AccountManager<TelegramAccountManagerTypes>.getCurrentRecords(basePath: rootPath + "/accounts-metadata")
@@ -1058,6 +1073,9 @@ private final class WidgetIntentHandler {
     
     deinit {
         self.searchDisposable.dispose()
+        if YougramLocalEncryptionBridge.isActive {
+            purgeExtensionEphemeralCache()
+        }
     }
     
     @available(iOSApplicationExtension 14.0, iOS 14.0, *)

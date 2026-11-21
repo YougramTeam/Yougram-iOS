@@ -81,28 +81,33 @@ private func getCommonTimeline(friends: [Friend]?, in context: TimelineProviderC
     
     let baseAppBundleId = String(appBundleIdentifier[..<lastDotRange.lowerBound])
     
-    let appGroupName = "group.\(baseAppBundleId)"
-    try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
-    let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-    
-    guard let appGroupUrl = maybeAppGroupUrl else {
-        completion(Timeline(entries: [SimpleEntry(date: entryDate, contents: .recent)], policy: .atEnd))
-        return
-    }
+    let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+    try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
+    let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
     
     let rootPath = rootPathForBasePath(appGroupUrl.path)
     
-    EngineTempBox.initializeShared(basePath: rootPath, processType: "widget", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
-    
-    let logsPath = rootPath + "/logs/widget-logs"
-    let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-    
-    setupSharedLogger(rootPath: logsPath, path: logsPath)
-    
+    let encryptionParameters: EngineValueBoxEncryptionParameters
+    switch resolveExtensionEncryptionParameters(rootPath: rootPath) {
+    case .disabled:
+        EngineTempBox.initializeShared(basePath: rootPath, processType: "widget", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        let logsPath = rootPath + "/logs/widget-logs"
+        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+        setupSharedLogger(rootPath: logsPath, path: logsPath)
+        let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+        encryptionParameters = EngineValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: EngineValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: EngineValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+    case let .unlocked(params):
+        EngineTempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "widget", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        let logsPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+        setupSharedLogger(rootPath: logsPath, path: logsPath)
+        Logger.shared.logToFile = false
+        encryptionParameters = params
+    case .locked:
+        completion(Timeline(entries: [SimpleEntry(date: entryDate, contents: .recent)], policy: .atEnd))
+        return
+    }
+
     initializeAccountManagement()
-    
-    let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-    let encryptionParameters = EngineValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: EngineValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: EngineValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
     
     var itemsByAccount: [Int64: [(Int64, Friend)]] = [:]
     var itemOrder: [(Int64, Int64)] = []
@@ -213,6 +218,11 @@ private func getCommonTimeline(friends: [Friend]?, in context: TimelineProviderC
         
         let result = ParsedPeers(peers: orderedPeers, updateTimestamp: Int32(Date().timeIntervalSince1970))
         completion(Timeline(entries: [SimpleEntry(date: entryDate, contents: .peers(result))], policy: .atEnd))
+        if YougramLocalEncryptionBridge.isActive {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                purgeExtensionEphemeralCache()
+            }
+        }
     })
 }
 

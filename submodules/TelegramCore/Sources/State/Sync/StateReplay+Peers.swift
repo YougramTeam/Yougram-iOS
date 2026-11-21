@@ -39,9 +39,19 @@ extension ReplayContext {
     }
     
     func applyUpdateCachedPeerData(_ id: PeerId, _ f: @escaping (CachedPeerData?) -> CachedPeerData?) {
+        var updatedUserIsBlocked: Bool?
         transaction.updatePeerCachedData(peerIds: Set([id]), update: { _, current in
-            return f(current)
+            let updated = f(current)
+            if let currentUser = current as? CachedUserData, let updatedUser = updated as? CachedUserData, currentUser.isBlocked != updatedUser.isBlocked {
+                updatedUserIsBlocked = updatedUser.isBlocked
+            } else if current == nil, let updatedUser = updated as? CachedUserData, updatedUser.isBlocked {
+                updatedUserIsBlocked = true
+            }
+            return updated
         })
+        if let updatedUserIsBlocked {
+            yougramSetPeerBlocked(transaction: transaction, peerId: id, isBlocked: updatedUserIsBlocked)
+        }
     }
     
     func applyMergePeerPresences(_ statuses: [PeerId: UpdatedApiPresence], _ explicit: Bool) {

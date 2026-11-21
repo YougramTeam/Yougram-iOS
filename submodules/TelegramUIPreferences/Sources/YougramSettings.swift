@@ -18,6 +18,10 @@ public struct YougramSettings: Codable, Equatable {
     public var hidePhoneInSettings: Bool
     public var hideAccountNameInNotifications: Bool
     public var hideAds: Bool
+    public var saveDeletedMessages: Bool
+    public var saveEditHistory: Bool
+    public var allowCopyProtectedContent: Bool
+    public var hideBlockedUsersMessages: Bool
 
     // MARK: Ghost Mode
     /// The master switch: each part below applies only while this is on (`ghostCoreOptions`).
@@ -94,6 +98,10 @@ public struct YougramSettings: Codable, Equatable {
             hidePhoneInSettings: false,
             hideAccountNameInNotifications: false,
             hideAds: true,
+            saveDeletedMessages: false,
+            saveEditHistory: false,
+            allowCopyProtectedContent: false,
+            hideBlockedUsersMessages: false,
             ghostModeEnabled: false,
             ghostHideReadReceipts: true,
             ghostHideVoiceListened: true,
@@ -145,6 +153,10 @@ public struct YougramSettings: Codable, Equatable {
         hidePhoneInSettings: Bool,
         hideAccountNameInNotifications: Bool,
         hideAds: Bool,
+        saveDeletedMessages: Bool,
+        saveEditHistory: Bool,
+        allowCopyProtectedContent: Bool,
+        hideBlockedUsersMessages: Bool,
         ghostModeEnabled: Bool,
         ghostHideReadReceipts: Bool,
         ghostHideVoiceListened: Bool,
@@ -193,6 +205,10 @@ public struct YougramSettings: Codable, Equatable {
         self.hidePhoneInSettings = hidePhoneInSettings
         self.hideAccountNameInNotifications = hideAccountNameInNotifications
         self.hideAds = hideAds
+        self.saveDeletedMessages = saveDeletedMessages
+        self.saveEditHistory = saveEditHistory
+        self.allowCopyProtectedContent = allowCopyProtectedContent
+        self.hideBlockedUsersMessages = hideBlockedUsersMessages
         self.ghostModeEnabled = ghostModeEnabled
         self.ghostHideReadReceipts = ghostHideReadReceipts
         self.ghostHideVoiceListened = ghostHideVoiceListened
@@ -241,6 +257,7 @@ public struct YougramSettings: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case hidePhoneInSettings, hideAccountNameInNotifications, hideAds, autoBackupAccounts
+        case saveDeletedMessages, saveEditHistory, allowCopyProtectedContent, hideBlockedUsersMessages
         case ghostModeEnabled, ghostHideReadReceipts, ghostHideVoiceListened, ghostHideRoundWatched, ghostHideStoryViews
         case ghostHideOnline, ghostHideTyping, ghostHideUploading, ghostHideChoosingSticker, ghostHideOtherActivities
         case ghostAutoOffline, ghostReadOnInteract, ghostSendAsScheduled, ghostStoryWarning
@@ -264,6 +281,10 @@ public struct YougramSettings: Codable, Equatable {
         self.hidePhoneInSettings = bool(.hidePhoneInSettings, d.hidePhoneInSettings)
         self.hideAccountNameInNotifications = bool(.hideAccountNameInNotifications, d.hideAccountNameInNotifications)
         self.hideAds = bool(.hideAds, d.hideAds)
+        self.saveDeletedMessages = bool(.saveDeletedMessages, d.saveDeletedMessages)
+        self.saveEditHistory = bool(.saveEditHistory, d.saveEditHistory)
+        self.allowCopyProtectedContent = bool(.allowCopyProtectedContent, d.allowCopyProtectedContent)
+        self.hideBlockedUsersMessages = bool(.hideBlockedUsersMessages, d.hideBlockedUsersMessages)
         self.ghostModeEnabled = bool(.ghostModeEnabled, d.ghostModeEnabled)
         self.ghostHideReadReceipts = bool(.ghostHideReadReceipts, d.ghostHideReadReceipts)
         self.ghostHideVoiceListened = bool(.ghostHideVoiceListened, d.ghostHideVoiceListened)
@@ -315,6 +336,10 @@ public struct YougramSettings: Codable, Equatable {
         try c.encode(self.hidePhoneInSettings, forKey: .hidePhoneInSettings)
         try c.encode(self.hideAccountNameInNotifications, forKey: .hideAccountNameInNotifications)
         try c.encode(self.hideAds, forKey: .hideAds)
+        try c.encode(self.saveDeletedMessages, forKey: .saveDeletedMessages)
+        try c.encode(self.saveEditHistory, forKey: .saveEditHistory)
+        try c.encode(self.allowCopyProtectedContent, forKey: .allowCopyProtectedContent)
+        try c.encode(self.hideBlockedUsersMessages, forKey: .hideBlockedUsersMessages)
         try c.encode(self.ghostModeEnabled, forKey: .ghostModeEnabled)
         try c.encode(self.ghostHideReadReceipts, forKey: .ghostHideReadReceipts)
         try c.encode(self.ghostHideVoiceListened, forKey: .ghostHideVoiceListened)
@@ -381,9 +406,23 @@ public struct YougramSettings: Codable, Equatable {
         options.hideChoosingSticker = self.ghostHideChoosingSticker
         options.hideOtherActivities = self.ghostHideOtherActivities
         options.autoOffline = self.ghostAutoOffline
-        options.readOnInteract = self.ghostReadOnInteract
+        options.readOnInteract = self.ghostHideReadReceipts && self.ghostReadOnInteract
         options.sendAsScheduled = self.ghostSendAsScheduled
         return options
+    }
+
+    public var hasAnyGhostFeatureEnabled: Bool {
+        return self.ghostHideReadReceipts
+            || self.ghostHideVoiceListened
+            || self.ghostHideRoundWatched
+            || self.ghostHideStoryViews
+            || self.ghostHideOnline
+            || self.ghostHideTyping
+            || self.ghostHideUploading
+            || self.ghostHideChoosingSticker
+            || self.ghostHideOtherActivities
+            || self.ghostAutoOffline
+            || self.ghostSendAsScheduled
     }
 
     // MARK: Synchronous access
@@ -404,6 +443,11 @@ public struct YougramSettings: Codable, Equatable {
     private static func applyCoreOptions(_ value: YougramSettings) {
         YougramCoreOptions.keepChatsAfterRemoval = value.keepChatsAfterBan
         YougramCoreOptions.ghostMode = value.ghostCoreOptions
+        YougramCoreOptions.hideAds = value.hideAds
+        YougramCoreOptions.saveDeletedMessages = value.saveDeletedMessages
+        YougramCoreOptions.saveEditHistory = value.saveEditHistory
+        YougramCoreOptions.allowCopyProtectedContent = value.allowCopyProtectedContent
+        YougramCoreOptions.hideBlockedUsersMessages = value.hideBlockedUsersMessages
     }
     private static let updatesPipe = ValuePipe<YougramSettings>()
 
@@ -432,7 +476,10 @@ public struct YougramSettings: Codable, Equatable {
         lock.unlock()
         applyCoreOptions(value)
         if changed {
-            if let data = try? JSONEncoder().encode(value) {
+            // Yougram: suppress plaintext UserDefaults mirroring while local encryption is active.
+            if YougramCoreOptions.localEncryptionEnabled {
+                UserDefaults.standard.removeObject(forKey: mirrorKey)
+            } else if let data = try? JSONEncoder().encode(value) {
                 UserDefaults.standard.set(data, forKey: mirrorKey)
             }
             updatesPipe.putNext(value)

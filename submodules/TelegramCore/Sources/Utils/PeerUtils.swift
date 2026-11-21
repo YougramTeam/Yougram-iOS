@@ -269,7 +269,8 @@ public extension Peer {
         }
     }
     
-    var isCopyProtectionEnabled: Bool {
+    // Yougram: raw server-side peer copy protection flag (used where server Forward cannot succeed).
+    var isServerCopyProtectionEnabled: Bool {
         switch self {
         case let group as TelegramGroup:
             return group.flags.contains(.copyProtectionEnabled)
@@ -278,6 +279,13 @@ public extension Peer {
         default:
             return false
         }
+    }
+
+    var isCopyProtectionEnabled: Bool {
+        if YougramCoreOptions.allowCopyProtectedContent {
+            return false
+        }
+        return self.isServerCopyProtectionEnabled
     }
     
     func hasSensitiveContent(platform: String, contentSettings: ContentSettings) -> Bool {

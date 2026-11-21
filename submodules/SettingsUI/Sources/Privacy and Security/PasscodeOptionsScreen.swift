@@ -365,6 +365,18 @@ private final class PasscodeOptionsScreenModel {
     private func confirmDisablePasscode(protectionEnabled: Bool) {
         let generation = self.sessionState.generation
         let presentationData = self.presentationData
+        // Yougram: block disabling App Passcode Lock while Local Encryption is bound to it.
+        if PasscodeCredentialStore.shared.isVaultProtectionEnabled() {
+            let blockedAlert = textAlertController(
+                context: self.context,
+                updatedPresentationData: self.updatedPresentationData,
+                title: presentationData.strings.Yougram_Encryption_PasscodeInUseTitle,
+                text: presentationData.strings.Yougram_Encryption_PasscodeInUseText,
+                actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+            )
+            self.controller?.present(blockedAlert, in: .window(.root))
+            return
+        }
         let alert = textAlertController(context: self.context, updatedPresentationData: self.updatedPresentationData, title: presentationData.strings.PasscodeSettings_TurnPasscodeOff, text: protectionEnabled ? presentationData.strings.PasscodeSettings_TurnOffWalletProtectionWarning : presentationData.strings.PasscodeSettings_TurnPasscodeOff, actions: [
             TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
             TextAlertAction(type: .destructiveAction, title: presentationData.strings.PasscodeSettings_TurnPasscodeOff, action: { [weak self] in

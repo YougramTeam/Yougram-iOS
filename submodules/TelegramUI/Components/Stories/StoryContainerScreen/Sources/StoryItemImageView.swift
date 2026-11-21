@@ -145,12 +145,18 @@ final class StoryItemImageView: UIView {
                 let cachedPath = context.engine.resources.cachedRepresentationCompletePath(id: EngineMediaResource.Id(file.resource.id), representation: CachedVideoFirstFrameRepresentation())
                 
                 if attemptSynchronous, FileManager.default.fileExists(atPath: cachedPath) {
+                    let cachedImage: UIImage?
+                    if context.engine.resources.isLocalEncryptionActive {
+                        cachedImage = context.engine.resources.readCachedRepresentationData(atPath: cachedPath).flatMap { UIImage(data: $0) }
+                    } else {
+                        cachedImage = UIImage(contentsOfFile: cachedPath)
+                    }
                     if #available(iOS 15.0, *) {
-                        if let image = UIImage(contentsOfFile: cachedPath)?.preparingForDisplay() {
+                        if let image = cachedImage?.preparingForDisplay() {
                             self.updateImage(image: image, isCaptureProtected: isCaptureProtected)
                         }
                     } else {
-                        if let image = UIImage(contentsOfFile: cachedPath)?.precomposed() {
+                        if let image = cachedImage?.precomposed() {
                             self.updateImage(image: image, isCaptureProtected: isCaptureProtected)
                         }
                     }

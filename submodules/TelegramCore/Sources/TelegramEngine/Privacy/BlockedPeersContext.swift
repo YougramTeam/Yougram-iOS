@@ -79,8 +79,9 @@ public final class BlockedPeersContext {
         guard self.requestGeneration == generation else { return }
         let postbox = self.account.postbox
         let accountPeerId = self.account.peerId
+        let subject = self.subject
         var flags: Int32 = 0
-        if case .stories = self.subject { flags |= 1 << 0 }
+        if case .stories = subject { flags |= 1 << 0 }
         let limit: Int32 = offset == 0 ? 200 : 100
         var receivedResult = false
         requestDisposable.set((self.account.network.request(Api.functions.contacts.getBlocked(flags: flags, offset: offset, limit: limit))
@@ -118,7 +119,11 @@ public final class BlockedPeersContext {
                         }
                     }
                 }
-                return Page(peers: renderedPeers, count: count, rawCount: Int32(clamping: blocked.count), canLoadMore: isSlice && !blocked.isEmpty && Int(offset) + blocked.count < count)
+                let canLoadMore = isSlice && !blocked.isEmpty && Int(offset) + blocked.count < count
+                if case .blocked = subject, offset == 0 && !canLoadMore {
+                    yougramReplaceBlockedPeers(transaction: transaction, peerIds: renderedPeers.map(\.peerId))
+                }
+                return Page(peers: renderedPeers, count: count, rawCount: Int32(clamping: blocked.count), canLoadMore: canLoadMore)
             }
         }
         |> deliverOnMainQueue).start(next: { [weak self] page in
@@ -202,6 +207,9 @@ public final class BlockedPeersContext {
                             return previous.withUpdatedIsBlocked(validPeerIds.contains(peerId))
                         }
                     })
+                    if case .blocked = subject {
+                        yougramReplaceBlockedPeers(transaction: transaction, peerIds: peers.map(\.id))
+                    }
                     return peers
                 }
                 |> castError(BlockedPeersContextAddError.self)
@@ -257,6 +265,9 @@ public final class BlockedPeersContext {
                                 return previous.withUpdatedIsBlocked(true)
                             }
                         })
+                    }
+                    if case .blocked = subject {
+                        yougramSetPeerBlocked(transaction: transaction, peerId: peerId, isBlocked: true)
                     }
                     
                     return transaction.getPeer(peerId)
@@ -330,6 +341,9 @@ public final class BlockedPeersContext {
                                 return previous.withUpdatedIsBlocked(false)
                             }
                         })
+                    }
+                    if case .blocked = subject {
+                        yougramSetPeerBlocked(transaction: transaction, peerId: peerId, isBlocked: false)
                     }
                     return transaction.getPeer(peerId)
                 }

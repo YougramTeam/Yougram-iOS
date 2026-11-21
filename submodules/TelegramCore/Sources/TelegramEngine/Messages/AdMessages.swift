@@ -451,7 +451,7 @@ private class AdMessagesHistoryContextImpl {
 
         self.stateValue = State(interPostInterval: nil, messages: [])
 
-        if messageId == nil {
+        if messageId == nil && !YougramCoreOptions.hideAds {
             self.state.set(CachedState.getCached(postbox: account.postbox, peerId: peerId)
             |> mapToSignal { cachedState -> Signal<State, NoError> in
                 if let cachedState = cachedState, cachedState.timestamp >= Int32(Date().timeIntervalSince1970) - 5 * 60 {
@@ -481,6 +481,13 @@ private class AdMessagesHistoryContextImpl {
             return
         }
         self.isActivated = true
+        
+        // Yougram: suppress sponsored message requests when Hide Ads is enabled.
+        if YougramCoreOptions.hideAds {
+            self.stateValue = State(interPostInterval: nil, messages: [])
+            self.state.set(.single(State(interPostInterval: nil, messages: [])))
+            return
+        }
         
         let peerId = self.peerId
         let accountPeerId = self.account.peerId
@@ -566,7 +573,7 @@ private class AdMessagesHistoryContextImpl {
                             }
                         }
 
-                        if messageId == nil {
+                        if messageId == nil && !YougramCoreOptions.hideAds {
                             CachedState.setCached(transaction: transaction, peerId: peerId, state: CachedState(timestamp: Int32(Date().timeIntervalSince1970), interPostInterval: postsBetween, messages: parsedMessages))
                         }
                         

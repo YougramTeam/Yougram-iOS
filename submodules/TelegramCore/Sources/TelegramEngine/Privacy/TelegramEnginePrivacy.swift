@@ -88,5 +88,13 @@ public extension TelegramEngine {
             return terminateAccountSession(account: self.account, hash: id)
             |> ignoreValues
         }
+
+        public func yougramBlockedPeerIds() -> Signal<Set<PeerId>, NoError> {
+            return _internal_yougramBlockedPeerIds(account: self.account)
+        }
+
+        public func yougramRefreshBlockedPeers() -> Signal<Void, NoError> {
+            return _internal_yougramRefreshBlockedPeers(account: self.account)
+        }
     }
 }

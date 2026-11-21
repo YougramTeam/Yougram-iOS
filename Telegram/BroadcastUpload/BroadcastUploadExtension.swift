@@ -322,20 +322,19 @@ private final class EmbeddedBroadcastUploadImpl: BroadcastUploadImpl {
 
         let baseAppBundleId = String(appBundleIdentifier[..<lastDotRange.lowerBound])
 
-        let appGroupName = "group.\(baseAppBundleId)"
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-
-        guard let appGroupUrl = maybeAppGroupUrl else {
-            self.finishWithError()
-            return
-        }
+        let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+        let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
 
         let rootPath = rootPathForBasePath(appGroupUrl.path)
         
-        EngineTempBox.initializeShared(basePath: rootPath, processType: "share", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        if YougramLocalEncryptionBridge.hasVaultManifest(rootPath: rootPath) {
+            EngineTempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "share", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        } else {
+            EngineTempBox.initializeShared(basePath: rootPath, processType: "share", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
 
-        let logsPath = rootPath + "/logs/broadcast-logs"
-        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+            let logsPath = rootPath + "/logs/broadcast-logs"
+            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+        }
 
         let embeddedBroadcastImplementationTypePath = rootPath + "/broadcast-coordination-type-v2"
         

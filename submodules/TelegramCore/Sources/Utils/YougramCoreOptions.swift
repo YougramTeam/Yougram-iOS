@@ -7,9 +7,96 @@ import Foundation
 /// changes. Every option defaults to upstream Telegram's behaviour, which is also what the
 /// extensions and tests see.
 public enum YougramCoreOptions {
+    public static let ghostModeDidChangeNotification = Notification.Name("YougramCoreOptionsGhostModeDidChange")
+
     private static let lock = NSLock()
     private static var _keepChatsAfterRemoval = false
     private static var _ghostMode = GhostMode()
+    private static var _localEncryptionEnabled = false
+    private static var _hideAds = false
+    private static var _saveDeletedMessages = false
+    private static var _saveEditHistory = false
+    private static var _allowCopyProtectedContent = false
+    private static var _hideBlockedUsersMessages = false
+
+    /// When true, optional Local Encryption is active (suppresses UserDefaults mirroring, file logging, etc.).
+    public static var localEncryptionEnabled: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _localEncryptionEnabled
+        }
+        set {
+            lock.lock()
+            _localEncryptionEnabled = newValue
+            lock.unlock()
+        }
+    }
+
+    public static var hideAds: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _hideAds
+        }
+        set {
+            lock.lock()
+            _hideAds = newValue
+            lock.unlock()
+        }
+    }
+
+    public static var saveDeletedMessages: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _saveDeletedMessages
+        }
+        set {
+            lock.lock()
+            _saveDeletedMessages = newValue
+            lock.unlock()
+        }
+    }
+
+    public static var saveEditHistory: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _saveEditHistory
+        }
+        set {
+            lock.lock()
+            _saveEditHistory = newValue
+            lock.unlock()
+        }
+    }
+
+    public static var allowCopyProtectedContent: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _allowCopyProtectedContent
+        }
+        set {
+            lock.lock()
+            _allowCopyProtectedContent = newValue
+            lock.unlock()
+        }
+    }
+
+    public static var hideBlockedUsersMessages: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _hideBlockedUsersMessages
+        }
+        set {
+            lock.lock()
+            _hideBlockedUsersMessages = newValue
+            lock.unlock()
+        }
+    }
 
     /// Keep a channel or group the user was banned or removed from in the chat list, with the
     /// messages already stored on this device, instead of hiding it. A chat the user left
@@ -59,6 +146,10 @@ public enum YougramCoreOptions {
         /// online.
         public var sendAsScheduled: Bool = false
 
+        public var hidesAnyActivity: Bool {
+            return self.hideTyping || self.hideUploading || self.hideChoosingSticker || self.hideOtherActivities
+        }
+
         public init() {
         }
     }
@@ -71,8 +162,12 @@ public enum YougramCoreOptions {
         }
         set {
             lock.lock()
+            let changed = _ghostMode != newValue
             _ghostMode = newValue
             lock.unlock()
+            if changed {
+                NotificationCenter.default.post(name: ghostModeDidChangeNotification, object: nil)
+            }
         }
     }
 }

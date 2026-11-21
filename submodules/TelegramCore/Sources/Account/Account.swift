@@ -1626,9 +1626,15 @@ public class Account {
         }
         
         let _ = masterNotificationsKey(masterNotificationKeyValue: self.masterNotificationKey, postbox: self.postbox, ignoreDisabled: false, createIfNotExists: true).start(next: { key in
-            let encoder = JSONEncoder()
-            if let data = try? encoder.encode(key) {
-                let _ = try? data.write(to: URL(fileURLWithPath: "\(basePath)/notificationsKey"))
+            // Yougram: never write plaintext notificationsKey JSON to disk when local encryption is active.
+            let notificationsKeyPath = "\(basePath)/notificationsKey"
+            if PostboxLocalEncryption.isActive {
+                let _ = try? FileManager.default.removeItem(atPath: notificationsKeyPath)
+            } else {
+                let encoder = JSONEncoder()
+                if let data = try? encoder.encode(key) {
+                    let _ = try? data.write(to: URL(fileURLWithPath: notificationsKeyPath))
+                }
             }
         })
         

@@ -9,11 +9,16 @@ import TelegramCore
 @objc(ShareRootController)
 class ShareRootController: UIViewController {
     private var impl: ShareRootControllerImpl?
+    private var isVaultLocked = false
     
     override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
         super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
         
         self.modalPresentationStyle = .fullScreen
+    }
+
+    deinit {
+        purgeExtensionEphemeralCache()
     }
     
     required init?(coder: NSCoder) {
@@ -35,18 +40,23 @@ class ShareRootController: UIViewController {
             
             let languagesCategory = "ios"
             
-            let appGroupName = "group.\(baseAppBundleId)"
-            try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
-            let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-            
-            guard let appGroupUrl = maybeAppGroupUrl else {
-                return
-            }
+            let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+            try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
+            let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
             
             let rootPath = appGroupUrl.path + "/telegram-data"
             
-            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-            let encryptionParameters: (Data, Data) = (deviceSpecificEncryptionParameters.key, deviceSpecificEncryptionParameters.salt)
+            let encryptionParameters: (Data, Data)
+            switch resolveExtensionEncryptionKeyPair(rootPath: rootPath) {
+            case .disabled:
+                let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+                encryptionParameters = (deviceSpecificEncryptionParameters.key, deviceSpecificEncryptionParameters.salt)
+            case let .unlocked(key, salt):
+                encryptionParameters = (key, salt)
+            case .locked:
+                self.isVaultLocked = true
+                return
+            }
             
             let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
             
@@ -82,6 +92,21 @@ class ShareRootController: UIViewController {
         self.impl?.loadView()
     }
     
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if self.isVaultLocked {
+            let alert = UIAlertController(
+                title: "Yougram Locked",
+                message: "Unlock Yougram to share.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default, handler: { [weak self] _ in
+                self?.extensionContext?.cancelRequest(withError: NSError(domain: "YougramVault", code: 1, userInfo: nil))
+            }))
+            self.present(alert, animated: true, completion: nil)
+        }
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         self.impl?.viewWillAppear()

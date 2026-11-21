@@ -232,11 +232,80 @@ public final class MediaBox {
     }
     
     private func fileNameForId(_ id: MediaResourceId) -> String {
-        return "\(id.stringRepresentation)"
+        return self.fileNameForId(id.stringRepresentation)
     }
     
     private func fileNameForId(_ id: String) -> String {
+        if let keys = PostboxLocalEncryption.current {
+            return PostboxLocalEncryption.obfuscatedFileName(for: id, keys: keys)
+        }
         return "\(id)"
+    }
+
+    private func obfuscatedRepresentationId(_ representationId: String) -> String {
+        if let keys = PostboxLocalEncryption.current {
+            return PostboxLocalEncryption.obfuscatedFileName(for: representationId, keys: keys)
+        }
+        return representationId
+    }
+
+    private func logicalFileSize(_ path: String) -> Int64? {
+        if let keys = PostboxLocalEncryption.current {
+            return YougramChunkedFileCrypto.plaintextSize(atPath: path, keys: keys)
+        }
+        return fileSize(path)
+    }
+
+    private func materializedPath(for path: String, pathExtension: String?) -> (path: String, size: Int64)? {
+        if let keys = PostboxLocalEncryption.current {
+            return PostboxLocalEncryption.ephemeralCache.materialize(encryptedPath: path, pathExtension: pathExtension, keys: keys)
+        }
+        guard let size = fileSize(path) else {
+            return nil
+        }
+        if let pathExtension {
+            let symlinkPath = path + ".\(pathExtension)"
+            if fileSize(symlinkPath) == nil {
+                let _ = try? FileManager.default.linkItem(atPath: path, toPath: symlinkPath)
+            }
+            return (symlinkPath, size)
+        }
+        return (path, size)
+    }
+
+    private func ephemeralCachePartialPath(for persistentPartialPath: String) -> String {
+        if let keys = PostboxLocalEncryption.current {
+            let dir = PostboxLocalEncryption.ephemeralCache.ephemeralSubdirectory("partial-cache")
+            return dir + "/" + PostboxLocalEncryption.hmacHex128(persistentPartialPath, key: keys.mediaFilenameKey)
+        }
+        return persistentPartialPath
+    }
+
+    // Yougram: authenticated whole-file helpers for DirectMediaImageCache and StoryItemImageView.
+    public func readEncryptedOrRawData(atPath path: String) -> Data? {
+        if let keys = PostboxLocalEncryption.current {
+            return try? YougramChunkedFileCrypto.decryptData(fromPath: path, keys: keys)
+        }
+        return try? Data(contentsOf: URL(fileURLWithPath: path))
+    }
+
+    @discardableResult
+    public func writeEncryptedOrRawData(_ data: Data, originalName: String, toPath path: String) -> Int64? {
+        if let keys = PostboxLocalEncryption.current {
+            do {
+                try YougramChunkedFileCrypto.encryptData(data, originalFileName: originalName, toPath: path, keys: keys)
+                PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: path)
+                return Int64(data.count)
+            } catch {
+                return nil
+            }
+        }
+        do {
+            try data.write(to: URL(fileURLWithPath: path), options: [.atomic])
+            return Int64(data.count)
+        } catch {
+            return nil
+        }
     }
     
     private func pathForId(_ id: MediaResourceId) -> String {
@@ -249,7 +318,7 @@ public final class MediaBox {
     
     public func fileSizeForId(_ id: MediaResourceId) -> Int64 {
         let paths = self.storePathsForId(id)
-        if let size = fileSize(paths.complete, useTotalFileAllocatedSize: false) {
+        if let size = self.logicalFileSize(paths.complete) {
             return size
         } else if let size = fileSize(paths.partial, useTotalFileAllocatedSize: true) {
             return size
@@ -270,7 +339,8 @@ public final class MediaBox {
             case .shortLived:
                 cacheString = "short-cache"
         }
-        return ResourceStorePaths(partial:  "\(self.basePath)/\(cacheString)/\(fileNameForId(id))_partial:\(representationId)", complete: "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(representationId)")
+        let obfRep = self.obfuscatedRepresentationId(representationId)
+        return ResourceStorePaths(partial: "\(self.basePath)/\(cacheString)/\(fileNameForId(id))_partial:\(obfRep)", complete: "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(obfRep)")
     }
     
     public func cachedRepresentationPathForId(_ id: String, representationId: String, keepDuration: CachedMediaRepresentationKeepDuration) -> String {
@@ -281,7 +351,7 @@ public final class MediaBox {
             case .shortLived:
                 cacheString = "short-cache"
         }
-        return "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(representationId)"
+        return "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(self.obfuscatedRepresentationId(representationId))"
     }
     
     public func cachedRepresentationCompletePath(_ id: MediaResourceId, representation: CachedMediaResourceRepresentation) -> String {
@@ -292,7 +362,7 @@ public final class MediaBox {
         case .shortLived:
             cacheString = "short-cache"
         }
-        return "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(representation.uniqueId)"
+        return "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(self.obfuscatedRepresentationId(representation.uniqueId))"
     }
     
     public func cachedRepresentationCompletePath(_ id: MediaResourceId, keepDuration: CachedMediaRepresentationKeepDuration, representationId: String) -> String {
@@ -303,10 +373,13 @@ public final class MediaBox {
         case .shortLived:
             cacheString = "short-cache"
         }
-        return "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(representationId)"
+        return "\(self.basePath)/\(cacheString)/\(fileNameForId(id)):\(self.obfuscatedRepresentationId(representationId))"
     }
     
     public func shortLivedResourceCachePathPrefix(_ id: MediaResourceId) -> String {
+        if PostboxLocalEncryption.isActive {
+            return PostboxLocalEncryption.ephemeralCache.ephemeralSubdirectory("short-cache") + "/" + self.fileNameForId(id)
+        }
         let cacheString = "short-cache"
         return "\(self.basePath)/\(cacheString)/\(fileNameForId(id))"
     }
@@ -314,7 +387,12 @@ public final class MediaBox {
     public func storeResourceData(_ id: MediaResourceId, data: Data, synchronous: Bool = false) {
         let begin = {
             let paths = self.storePathsForId(id)
-            let _ = try? data.write(to: URL(fileURLWithPath: paths.complete), options: [.atomic])
+            if let keys = PostboxLocalEncryption.current {
+                let _ = try? YougramChunkedFileCrypto.encryptData(data, originalFileName: id.stringRepresentation, toPath: paths.complete, keys: keys)
+                PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+            } else {
+                let _ = try? data.write(to: URL(fileURLWithPath: paths.complete), options: [.atomic])
+            }
         }
         if synchronous {
             begin()
@@ -335,21 +413,40 @@ public final class MediaBox {
     public func moveResourceData(_ id: MediaResourceId, fromTempPath: String) {
         self.dataQueue.async {
             let paths = self.storePathsForId(id)
-            let _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: fromTempPath), to: URL(fileURLWithPath: paths.complete))
+            if let keys = PostboxLocalEncryption.current {
+                if (try? YougramChunkedFileCrypto.encryptFile(fromPath: fromTempPath, originalFileName: id.stringRepresentation, toPath: paths.complete, keys: keys)) != nil {
+                    let _ = try? FileManager.default.removeItem(atPath: fromTempPath)
+                    PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+                }
+            } else {
+                let _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: fromTempPath), to: URL(fileURLWithPath: paths.complete))
+            }
         }
     }
     
     public func moveResourceData(_ id: MediaResourceId, toTempPath: String) {
         self.dataQueue.async {
             let paths = self.storePathsForId(id)
-            let _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: paths.complete), to: URL(fileURLWithPath: toTempPath))
+            if let keys = PostboxLocalEncryption.current {
+                if (try? YougramChunkedFileCrypto.decryptFile(fromPath: paths.complete, toPath: toTempPath, keys: keys, protection: .complete)) != nil {
+                    unlink(paths.complete)
+                    PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+                }
+            } else {
+                let _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: paths.complete), to: URL(fileURLWithPath: toTempPath))
+            }
         }
     }
     
     public func copyResourceData(_ id: MediaResourceId, fromTempPath: String) {
         self.dataQueue.async {
             let paths = self.storePathsForId(id)
-            let _ = try? FileManager.default.copyItem(at: URL(fileURLWithPath: fromTempPath), to: URL(fileURLWithPath: paths.complete))
+            if let keys = PostboxLocalEncryption.current {
+                let _ = try? YougramChunkedFileCrypto.encryptFile(fromPath: fromTempPath, originalFileName: id.stringRepresentation, toPath: paths.complete, keys: keys)
+                PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+            } else {
+                let _ = try? FileManager.default.copyItem(at: URL(fileURLWithPath: fromTempPath), to: URL(fileURLWithPath: paths.complete))
+            }
         }
     }
     
@@ -361,9 +458,16 @@ public final class MediaBox {
             let pathsFrom = self.storePathsForId(from)
             let pathsTo = self.storePathsForId(to)
             link(pathsFrom.partial, pathsTo.partial)
+            link(pathsFrom.partial + ".meta", pathsTo.partial + ".meta")
             link(pathsFrom.complete, pathsTo.complete)
             unlink(pathsFrom.partial)
+            unlink(pathsFrom.partial + ".meta")
             unlink(pathsFrom.complete)
+            PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: pathsFrom.complete)
+            PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: pathsTo.complete)
+            if let keys = PostboxLocalEncryption.current, FileManager.default.fileExists(atPath: pathsTo.complete) {
+                let _ = YougramChunkedFileCrypto.updateOriginalFileName(atPath: pathsTo.complete, newOriginalFileName: to.stringRepresentation, keys: keys)
+            }
         }
         if synchronous {
             begin()
@@ -380,7 +484,12 @@ public final class MediaBox {
             let pathsFrom = self.storePathsForId(from)
             let pathsTo = self.storePathsForId(to)
             let _ = try? FileManager.default.copyItem(atPath: pathsFrom.partial, toPath: pathsTo.partial)
+            let _ = try? FileManager.default.copyItem(atPath: pathsFrom.partial + ".meta", toPath: pathsTo.partial + ".meta")
             let _ = try? FileManager.default.copyItem(atPath: pathsFrom.complete, toPath: pathsTo.complete)
+            PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: pathsTo.complete)
+            if let keys = PostboxLocalEncryption.current, FileManager.default.fileExists(atPath: pathsTo.complete) {
+                let _ = YougramChunkedFileCrypto.updateOriginalFileName(atPath: pathsTo.complete, newOriginalFileName: to.stringRepresentation, keys: keys)
+            }
         }
         if synchronous {
             begin()
@@ -496,6 +605,9 @@ public final class MediaBox {
     
     public func resourcePath(_ resource: MediaResource) -> String {
         let paths = self.storePathsForId(resource.id)
+        if PostboxLocalEncryption.isActive, let materialized = self.materializedPath(for: paths.complete, pathExtension: nil) {
+            return materialized.path
+        }
         return paths.complete
     }
     
@@ -505,10 +617,13 @@ public final class MediaBox {
     
     public func completedResourcePath(id: MediaResourceId, pathExtension: String? = nil) -> String? {
         let paths = self.storePathsForId(id)
-        if let _ = fileSize(paths.complete) {
+        if let _ = self.logicalFileSize(paths.complete) {
             self.timeBasedCleanup.touch(paths: [
                 paths.complete
             ])
+            if PostboxLocalEncryption.isActive {
+                return self.materializedPath(for: paths.complete, pathExtension: pathExtension)?.path
+            }
             if let pathExtension = pathExtension {
                 let symlinkPath = paths.complete + ".\(pathExtension)"
                 if fileSize(symlinkPath) == nil {
@@ -534,11 +649,18 @@ public final class MediaBox {
             let begin: () -> Void = {
                 let paths = self.storePathsForId(id)
                 
-                if let completeSize = fileSize(paths.complete) {
+                if let completeSize = self.logicalFileSize(paths.complete) {
                     self.timeBasedCleanup.touch(paths: [
                         paths.complete
                     ])
-                    if let pathExtension = pathExtension {
+                    if PostboxLocalEncryption.isActive {
+                        if let materialized = self.materializedPath(for: paths.complete, pathExtension: pathExtension) {
+                            subscriber.putNext(MediaResourceData(path: materialized.path, offset: 0, size: materialized.size, complete: true))
+                        } else {
+                            subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false))
+                        }
+                        subscriber.putCompletion()
+                    } else if let pathExtension = pathExtension {
                         let symlinkPath = paths.complete + ".\(pathExtension)"
                         if fileSize(symlinkPath) == nil {
                             let _ = try? FileManager.default.linkItem(atPath: paths.complete, toPath: symlinkPath)
@@ -551,7 +673,8 @@ public final class MediaBox {
                     }
                 } else {
                     if attemptSynchronously, case .complete(false) = option {
-                        subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: fileSize(paths.partial) ?? 0, complete: false))
+                        let partialReportedSize = PostboxLocalEncryption.isActive ? 0 : (fileSize(paths.partial) ?? 0)
+                        subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: partialReportedSize, complete: false))
                     }
                     self.dataQueue.async {
                         if let (fileContext, releaseContext) = self.fileContext(for: id) {
@@ -565,7 +688,13 @@ public final class MediaBox {
                             let dataDisposable = fileContext.data(range: 0 ..< Int64.max, waitUntilAfterInitialFetch: waitUntilAfterInitialFetch, next: { value in
                                 self.dataQueue.async {
                                     if value.complete {
-                                        if let pathExtension = pathExtension {
+                                        if PostboxLocalEncryption.isActive {
+                                            if let materialized = self.materializedPath(for: value.path, pathExtension: pathExtension) {
+                                                subscriber.putNext(MediaResourceData(path: materialized.path, offset: 0, size: materialized.size, complete: true))
+                                            } else {
+                                                subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false))
+                                            }
+                                        } else if let pathExtension = pathExtension {
                                             let symlinkPath = paths.complete + ".\(pathExtension)"
                                             if fileSize(symlinkPath) == nil {
                                                 let _ = try? FileManager.default.linkItem(atPath: paths.complete, toPath: symlinkPath)
@@ -722,11 +851,59 @@ public final class MediaBox {
             return MediaBoxPartialFile.internal_extractPartialData(manager: tempManager, path: paths.partial, metaPath: paths.partial + ".meta", range: range)
         }
     }
+
+    // Yougram: streaming range reader that decrypts YGCF / YGPR directly into RAM for FFMpegFileReader.
+    public func internal_readResourceData(id: MediaResourceId, size: Int64, in range: Range<Int64>, into buffer: UnsafeMutablePointer<UInt8>, maxCount: Int) -> Int? {
+        guard maxCount >= 0 else {
+            return nil
+        }
+        if let keys = PostboxLocalEncryption.current {
+            let paths = self.storePathsForId(id)
+            self.timeBasedCleanup.touch(paths: [
+                paths.complete
+            ])
+            if let completeSize = YougramChunkedFileCrypto.plaintextSize(atPath: paths.complete, keys: keys) {
+                let clippedLowerBound = min(completeSize, max(0, range.lowerBound))
+                let clippedUpperBound = min(completeSize, max(0, range.upperBound))
+                if clippedLowerBound < clippedUpperBound && (clippedUpperBound - clippedLowerBound) <= 64 * 1024 * 1024 {
+                    return YougramChunkedFileCrypto.decryptRange(
+                        fromPath: paths.complete,
+                        range: clippedLowerBound ..< clippedUpperBound,
+                        into: buffer,
+                        maxCount: maxCount,
+                        keys: keys
+                    )
+                } else {
+                    return nil
+                }
+            } else {
+                let tempManager = MediaBoxFileManager(queue: nil)
+                return withExtendedLifetime(tempManager, {
+                    return MediaBoxPartialFile.internal_readPartialData(
+                        manager: tempManager,
+                        path: paths.partial,
+                        metaPath: paths.partial + ".meta",
+                        range: range,
+                        into: buffer,
+                        maxCount: maxCount
+                    )
+                })
+            }
+        } else {
+            if let (file, readSize) = self.internal_resourceData(id: id, size: size, in: range) {
+                let effectiveReadSize = max(0, min(maxCount, readSize))
+                let count = file.read(buffer, effectiveReadSize)
+                return count >= 0 ? count : nil
+            } else {
+                return nil
+            }
+        }
+    }
     
     public func internal_resourceDataIsCached(id: MediaResourceId, size: Int64, in range: Range<Int64>) -> Bool {
         let paths = self.storePathsForId(id)
         
-        if let _ = fileSize(paths.complete) {
+        if let _ = self.logicalFileSize(paths.complete) {
             return true
         } else {
             let tempManager = MediaBoxFileManager(queue: nil)
@@ -741,7 +918,26 @@ public final class MediaBox {
             if attemptSynchronously {
                 let paths = self.storePathsForId(id)
                 
-                if let completeSize = fileSize(paths.complete) {
+                if let keys = PostboxLocalEncryption.current {
+                    if let completeSize = YougramChunkedFileCrypto.plaintextSize(atPath: paths.complete, keys: keys) {
+                        self.timeBasedCleanup.touch(paths: [
+                            paths.complete
+                        ])
+                        let clippedLowerBound = min(completeSize, max(0, range.lowerBound))
+                        let clippedUpperBound = min(completeSize, max(0, range.upperBound))
+                        if clippedLowerBound < clippedUpperBound && (clippedUpperBound - clippedLowerBound) <= 64 * 1024 * 1024 {
+                            if let data = try? YougramChunkedFileCrypto.decryptRange(fromPath: paths.complete, range: clippedLowerBound ..< clippedUpperBound, keys: keys) {
+                                subscriber.putNext((data, true))
+                                subscriber.putCompletion()
+                                return EmptyDisposable
+                            }
+                        } else {
+                            subscriber.putNext((Data(), true))
+                            subscriber.putCompletion()
+                            return EmptyDisposable
+                        }
+                    }
+                } else if let completeSize = fileSize(paths.complete) {
                     self.timeBasedCleanup.touch(paths: [
                         paths.complete
                     ])
@@ -779,6 +975,38 @@ public final class MediaBox {
                 }
                 
                 let dataDisposable = fileContext.data(range: range, waitUntilAfterInitialFetch: false, next: { result in
+                    if let keys = PostboxLocalEncryption.current {
+                        if result.complete {
+                            if let header = YougramChunkedFileCrypto.readHeader(atPath: result.path, keys: keys) {
+                                let clippedLowerBound = min(result.offset, header.plaintextSize)
+                                let clippedUpperBound = min(result.offset + result.size, header.plaintextSize)
+                                if clippedUpperBound == clippedLowerBound {
+                                    subscriber.putNext((Data(), true))
+                                    subscriber.putCompletion()
+                                    return
+                                } else if clippedUpperBound <= header.plaintextSize && (clippedUpperBound - clippedLowerBound) <= 64 * 1024 * 1024,
+                                          let data = try? YougramChunkedFileCrypto.decryptRange(fromPath: result.path, range: clippedLowerBound ..< clippedUpperBound, keys: keys) {
+                                    subscriber.putNext((data, true))
+                                    subscriber.putCompletion()
+                                    return
+                                }
+                            } else if let data = MediaBoxPartialFile.extractPartialData(manager: self.dataFileManager, path: result.path, metaPath: result.path + ".meta", range: result.offset ..< (result.offset + result.size)) {
+                                subscriber.putNext((data, true))
+                                subscriber.putCompletion()
+                                return
+                            }
+                        }
+                        switch mode {
+                            case .complete, .incremental:
+                                if notifyAboutIncomplete {
+                                    subscriber.putNext((Data(), false))
+                                }
+                            case .partial:
+                                subscriber.putNext((Data(), false))
+                        }
+                        return
+                    }
+
                     if let file = ManagedFile(queue: self.dataQueue, path: result.path, mode: .read), let fileSize = file.getSize() {
                         if result.complete {
                             let clippedLowerBound = min(result.offset, fileSize)
@@ -957,7 +1185,7 @@ public final class MediaBox {
             if let pathData = path.data(using: .utf8) {
                 self.cacheStorageBox.update(id: pathData, size: Int64(data.count))
             }
-            let _ = try? data.write(to: URL(fileURLWithPath: path))
+            let _ = self.writeEncryptedOrRawData(data, originalName: "\(resource.id.stringRepresentation):\(representation.uniqueId)", toPath: path)
         }
     }
 
@@ -967,7 +1195,7 @@ public final class MediaBox {
             if let pathData = path.data(using: .utf8) {
                 self.cacheStorageBox.update(id: pathData, size: Int64(data.count))
             }
-            let _ = try? data.write(to: URL(fileURLWithPath: path))
+            let _ = self.writeEncryptedOrRawData(data, originalName: "\(resource.id.stringRepresentation):\(representationId)", toPath: path)
             completion(path)
         }
     }
@@ -975,7 +1203,7 @@ public final class MediaBox {
     public func storeCachedResourceRepresentation(_ resourceId: String, representationId: String, keepDuration: CachedMediaRepresentationKeepDuration, data: Data, completion: @escaping (String) -> Void = { _ in }) {
         self.dataQueue.async {
             let path = self.cachedRepresentationPathsForId(resourceId, representationId: representationId, keepDuration: keepDuration).complete
-            let _ = try? data.write(to: URL(fileURLWithPath: path))
+            let _ = self.writeEncryptedOrRawData(data, originalName: "\(resourceId):\(representationId)", toPath: path)
             if let pathData = path.data(using: .utf8) {
                 self.cacheStorageBox.update(id: pathData, size: Int64(data.count))
             }
@@ -986,11 +1214,163 @@ public final class MediaBox {
     public func storeCachedResourceRepresentation(_ resourceId: String, representationId: String, keepDuration: CachedMediaRepresentationKeepDuration, tempFile: TempBoxFile, completion: @escaping (String) -> Void = { _ in }) {
         self.dataQueue.async {
             let path = self.cachedRepresentationPathsForId(resourceId, representationId: representationId, keepDuration: keepDuration).complete
-            let _ = try? FileManager.default.moveItem(atPath: tempFile.path, toPath: path)
-            if let fileSize = fileSize(path), fileSize != 0, let pathData = path.data(using: .utf8) {
-                self.cacheStorageBox.update(id: pathData, size: fileSize)
+            if let keys = PostboxLocalEncryption.current {
+                if (try? YougramChunkedFileCrypto.encryptFile(fromPath: tempFile.path, originalFileName: "\(resourceId):\(representationId)", toPath: path, keys: keys)) != nil {
+                    let _ = try? FileManager.default.removeItem(atPath: tempFile.path)
+                    PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: path)
+                }
+            } else {
+                let _ = try? FileManager.default.moveItem(atPath: tempFile.path, toPath: path)
+            }
+            if let size = self.logicalFileSize(path), size != 0, let pathData = path.data(using: .utf8) {
+                self.cacheStorageBox.update(id: pathData, size: size)
             }
             completion(path)
+        }
+    }
+
+    private func deliverCachedRepresentationData(
+        _ data: MediaResourceData,
+        partialFallbackPath: String,
+        pathExtension: String?,
+        complete: Bool,
+        subscriber: Subscriber<MediaResourceData, NoError>
+    ) {
+        if !complete || data.complete {
+            if PostboxLocalEncryption.isActive {
+                if data.complete {
+                    if let materialized = self.materializedPath(for: data.path, pathExtension: pathExtension) {
+                        subscriber.putNext(MediaResourceData(path: materialized.path, offset: 0, size: materialized.size, complete: true))
+                    } else {
+                        subscriber.putNext(MediaResourceData(path: partialFallbackPath, offset: 0, size: 0, complete: false))
+                    }
+                } else {
+                    subscriber.putNext(MediaResourceData(path: partialFallbackPath, offset: 0, size: 0, complete: false))
+                }
+            } else if let pathExtension = pathExtension, data.complete {
+                let symlinkPath = data.path + ".\(pathExtension)"
+                if fileSize(symlinkPath) == nil {
+                    let _ = try? FileManager.default.linkItem(atPath: data.path, toPath: symlinkPath)
+                }
+                subscriber.putNext(MediaResourceData(path: symlinkPath, offset: data.offset, size: data.size, complete: data.complete))
+            } else {
+                subscriber.putNext(data)
+            }
+        }
+        if data.complete {
+            subscriber.putCompletion()
+        }
+    }
+
+    private func applyCachedRepresentationResult(
+        _ next: CachedMediaResourceRepresentationResult?,
+        logicalName: String,
+        paths: ResourceStorePaths,
+        stagingPartialPath: String,
+        key: CachedMediaResourceRepresentationKey,
+        context: CachedMediaResourceRepresentationContext
+    ) {
+        let cacheStorageBox = self.cacheStorageBox
+        if let next = next {
+            var isDone = false
+            switch next {
+            case let .temporaryPath(temporaryPath):
+                if let keys = PostboxLocalEncryption.current {
+                    if (try? YougramChunkedFileCrypto.encryptFile(fromPath: temporaryPath, originalFileName: logicalName, toPath: paths.complete, keys: keys)) != nil {
+                        let _ = try? FileManager.default.removeItem(atPath: temporaryPath)
+                        PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+                    }
+                } else {
+                    rename(temporaryPath, paths.complete)
+                }
+                if let size = self.logicalFileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
+                    cacheStorageBox.update(id: pathData, size: size)
+                }
+                isDone = true
+            case let .tempFile(tempFile):
+                if let keys = PostboxLocalEncryption.current {
+                    if (try? YougramChunkedFileCrypto.encryptFile(fromPath: tempFile.path, originalFileName: logicalName, toPath: paths.complete, keys: keys)) != nil {
+                        PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+                    }
+                } else {
+                    rename(tempFile.path, paths.complete)
+                }
+                TempBox.shared.dispose(tempFile)
+                if let size = self.logicalFileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
+                    cacheStorageBox.update(id: pathData, size: size)
+                }
+                isDone = true
+            case .reset:
+                let file = ManagedFile(queue: self.dataQueue, path: stagingPartialPath, mode: .readwrite)
+                file?.truncate(count: 0)
+                unlink(paths.complete)
+                PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+                if let pathData = paths.complete.data(using: .utf8) {
+                    cacheStorageBox.update(id: pathData, size: 0)
+                }
+            case let .data(dataPart):
+                let file = ManagedFile(queue: self.dataQueue, path: stagingPartialPath, mode: .append)
+                let dataCount = dataPart.count
+                if dataCount > 0 {
+                    dataPart.withUnsafeBytes { rawBytes -> Void in
+                        if let base = rawBytes.baseAddress {
+                            let bytes = base.assumingMemoryBound(to: UInt8.self)
+                            let _ = file?.write(bytes, count: dataCount)
+                        }
+                    }
+                }
+                if let file = file, let size = file.getSize(), let pathData = paths.complete.data(using: .utf8) {
+                    cacheStorageBox.update(id: pathData, size: size)
+                }
+            case .done:
+                if let keys = PostboxLocalEncryption.current {
+                    if (try? YougramChunkedFileCrypto.encryptFile(fromPath: stagingPartialPath, originalFileName: logicalName, toPath: paths.complete, keys: keys)) != nil {
+                        unlink(stagingPartialPath)
+                        PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
+                    }
+                } else {
+                    link(stagingPartialPath, paths.complete)
+                }
+                if let size = self.logicalFileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
+                    cacheStorageBox.update(id: pathData, size: size)
+                }
+                isDone = true
+            }
+
+            if let currentContext = self.cachedRepresentationContexts[key], currentContext === context {
+                if isDone {
+                    currentContext.disposable.dispose()
+                    self.cachedRepresentationContexts.removeValue(forKey: key)
+                }
+                if let size = self.logicalFileSize(paths.complete) {
+                    let data = MediaResourceData(path: paths.complete, offset: 0, size: size, complete: isDone)
+                    currentContext.currentData = data
+                    for subscriber in currentContext.dataSubscribers.copyItems() {
+                        if !subscriber.onlyComplete || isDone {
+                            subscriber.update(data)
+                        }
+                    }
+                } else if let size = fileSize(stagingPartialPath) {
+                    let reportedPath = PostboxLocalEncryption.isActive ? paths.partial : stagingPartialPath
+                    let data = MediaResourceData(path: reportedPath, offset: 0, size: size, complete: isDone)
+                    currentContext.currentData = data
+                    for subscriber in currentContext.dataSubscribers.copyItems() {
+                        if !subscriber.onlyComplete || isDone {
+                            subscriber.update(data)
+                        }
+                    }
+                }
+            }
+        } else {
+            if let context = self.cachedRepresentationContexts[key] {
+                let data = MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false)
+                context.currentData = data
+                for subscriber in context.dataSubscribers.copyItems() {
+                    if !subscriber.onlyComplete {
+                        subscriber.update(data)
+                    }
+                }
+            }
         }
     }
     
@@ -1000,12 +1380,18 @@ public final class MediaBox {
             
             let begin: () -> Void = {
                 let paths = self.cachedRepresentationPathsForId(resource.id.stringRepresentation, representationId: representation.uniqueId, keepDuration: representation.keepDuration)
-                if let size = fileSize(paths.complete) {
+                if let size = self.logicalFileSize(paths.complete) {
                     self.timeBasedCleanup.touch(paths: [
                         paths.complete
                     ])
-                    
-                    if let pathExtension = pathExtension {
+                    if PostboxLocalEncryption.isActive {
+                        if let materialized = self.materializedPath(for: paths.complete, pathExtension: pathExtension) {
+                            subscriber.putNext(MediaResourceData(path: materialized.path, offset: 0, size: materialized.size, complete: true))
+                        } else {
+                            subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false))
+                        }
+                        subscriber.putCompletion()
+                    } else if let pathExtension = pathExtension {
                         let symlinkPath = paths.complete + ".\(pathExtension)"
                         if fileSize(symlinkPath) == nil {
                             let _ = try? FileManager.default.linkItem(atPath: paths.complete, toPath: symlinkPath)
@@ -1031,28 +1417,10 @@ public final class MediaBox {
                         }
                         
                         let index = context.dataSubscribers.add(CachedMediaResourceRepresentationSubscriber(update: { data in
-                            if !complete || data.complete {
-                                if let pathExtension = pathExtension, data.complete {
-                                    let symlinkPath = data.path + ".\(pathExtension)"
-                                    if fileSize(symlinkPath) == nil {
-                                        let _ = try? FileManager.default.linkItem(atPath: data.path, toPath: symlinkPath)
-                                    }
-                                    subscriber.putNext(MediaResourceData(path: symlinkPath, offset: data.offset, size: data.size, complete: data.complete))
-                                } else {
-                                    subscriber.putNext(data)
-                                }
-                            }
-                            if data.complete {
-                                subscriber.putCompletion()
-                            }
+                            self.deliverCachedRepresentationData(data, partialFallbackPath: paths.partial, pathExtension: pathExtension, complete: complete, subscriber: subscriber)
                         }, onlyComplete: complete))
                         if let currentData = context.currentData {
-                            if !complete || currentData.complete {
-                                subscriber.putNext(currentData)
-                            }
-                            if currentData.complete {
-                                subscriber.putCompletion()
-                            }
+                            self.deliverCachedRepresentationData(currentData, partialFallbackPath: paths.partial, pathExtension: pathExtension, complete: complete, subscriber: subscriber)
                         } else if !complete {
                             subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false))
                         }
@@ -1074,7 +1442,8 @@ public final class MediaBox {
                         
                         if !context.initialized {
                             context.initialized = true
-                            let cacheStorageBox = self.cacheStorageBox
+                            let logicalName = "\(resource.id.stringRepresentation):\(representation.uniqueId)"
+                            let stagingPartialPath = self.ephemeralCachePartialPath(for: paths.partial)
                             let signal = self.wrappedFetchCachedResourceRepresentation.get()
                             |> take(1)
                             |> mapToSignal { fetch in
@@ -1083,84 +1452,17 @@ public final class MediaBox {
                             }
                             |> deliverOn(self.dataQueue)
                             context.disposable.set(signal.startStrict(next: { [weak self, weak context] next in
-                                guard let strongSelf = self else {
+                                guard let strongSelf = self, let context else {
                                     return
                                 }
-                                if let next = next {
-                                    var isDone = false
-                                    switch next {
-                                    case let .temporaryPath(temporaryPath):
-                                        rename(temporaryPath, paths.complete)
-                                        if let size = fileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
-                                            cacheStorageBox.update(id: pathData, size: size)
-                                        }
-                                        isDone = true
-                                    case let .tempFile(tempFile):
-                                        rename(tempFile.path, paths.complete)
-                                        TempBox.shared.dispose(tempFile)
-                                        if let size = fileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
-                                            cacheStorageBox.update(id: pathData, size: size)
-                                        }
-                                        isDone = true
-                                    case .reset:
-                                        let file = ManagedFile(queue: strongSelf.dataQueue, path: paths.partial, mode: .readwrite)
-                                        file?.truncate(count: 0)
-                                        unlink(paths.complete)
-                                        if let pathData = paths.complete.data(using: .utf8) {
-                                            cacheStorageBox.update(id: pathData, size: 0)
-                                        }
-                                    case let .data(dataPart):
-                                        let file = ManagedFile(queue: strongSelf.dataQueue, path: paths.partial, mode: .append)
-                                        let dataCount = dataPart.count
-                                        dataPart.withUnsafeBytes { rawBytes -> Void in
-                                            let bytes = rawBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
-                                            let _ = file?.write(bytes, count: dataCount)
-                                        }
-                                        if let file = file, let size = file.getSize(), let pathData = paths.complete.data(using: .utf8) {
-                                            cacheStorageBox.update(id: pathData, size: size)
-                                        }
-                                    case .done:
-                                        link(paths.partial, paths.complete)
-                                        if let size = fileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
-                                            cacheStorageBox.update(id: pathData, size: size)
-                                        }
-                                        isDone = true
-                                    }
-                                    
-                                    if let strongSelf = self, let currentContext = strongSelf.cachedRepresentationContexts[key], currentContext === context {
-                                        if isDone {
-                                            currentContext.disposable.dispose()
-                                            strongSelf.cachedRepresentationContexts.removeValue(forKey: key)
-                                        }
-                                        if let size = fileSize(paths.complete) {
-                                            let data = MediaResourceData(path: paths.complete, offset: 0, size: size, complete: isDone)
-                                            currentContext.currentData = data
-                                            for subscriber in currentContext.dataSubscribers.copyItems() {
-                                                if !subscriber.onlyComplete || isDone {
-                                                    subscriber.update(data)
-                                                }
-                                            }
-                                        } else if let size = fileSize(paths.partial) {
-                                            let data = MediaResourceData(path: paths.partial, offset: 0, size: size, complete: isDone)
-                                            currentContext.currentData = data
-                                            for subscriber in currentContext.dataSubscribers.copyItems() {
-                                                if !subscriber.onlyComplete || isDone {
-                                                    subscriber.update(data)
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    if let strongSelf = self, let context = strongSelf.cachedRepresentationContexts[key] {
-                                        let data = MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false)
-                                        context.currentData = data
-                                        for subscriber in context.dataSubscribers.copyItems() {
-                                            if !subscriber.onlyComplete {
-                                                subscriber.update(data)
-                                            }
-                                        }
-                                    }
-                                }
+                                strongSelf.applyCachedRepresentationResult(
+                                    next,
+                                    logicalName: logicalName,
+                                    paths: paths,
+                                    stagingPartialPath: stagingPartialPath,
+                                    key: key,
+                                    context: context
+                                )
                             }))
                         }
                     }
@@ -1186,17 +1488,28 @@ public final class MediaBox {
 
             let begin: () -> Void = {
                 let paths: ResourceStorePaths
+                let logicalName: String
                 if let baseResourceId = baseResourceId {
-                    paths = self.cachedRepresentationPathsForId(MediaResourceId(baseResourceId).stringRepresentation, representationId: id, keepDuration: keepDuration)
+                    let baseId = MediaResourceId(baseResourceId).stringRepresentation
+                    paths = self.cachedRepresentationPathsForId(baseId, representationId: id, keepDuration: keepDuration)
+                    logicalName = "\(baseId):\(id)"
                 } else {
-                    paths = self.storePathsForId(MediaResourceId(id))
+                    let resId = MediaResourceId(id)
+                    paths = self.storePathsForId(resId)
+                    logicalName = resId.stringRepresentation
                 }
-                if let size = fileSize(paths.complete) {
+                if let size = self.logicalFileSize(paths.complete) {
                     self.timeBasedCleanup.touch(paths: [
                         paths.complete
                     ])
-
-                    if let pathExtension = pathExtension {
+                    if PostboxLocalEncryption.isActive {
+                        if let materialized = self.materializedPath(for: paths.complete, pathExtension: pathExtension) {
+                            subscriber.putNext(MediaResourceData(path: materialized.path, offset: 0, size: materialized.size, complete: true))
+                        } else {
+                            subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false))
+                        }
+                        subscriber.putCompletion()
+                    } else if let pathExtension = pathExtension {
                         let symlinkPath = paths.complete + ".\(pathExtension)"
                         if fileSize(symlinkPath) == nil {
                             let _ = try? FileManager.default.linkItem(atPath: paths.complete, toPath: symlinkPath)
@@ -1222,28 +1535,10 @@ public final class MediaBox {
                         }
 
                         let index = context.dataSubscribers.add(CachedMediaResourceRepresentationSubscriber(update: { data in
-                            if !complete || data.complete {
-                                if let pathExtension = pathExtension, data.complete {
-                                    let symlinkPath = data.path + ".\(pathExtension)"
-                                    if fileSize(symlinkPath) == nil {
-                                        let _ = try? FileManager.default.linkItem(atPath: data.path, toPath: symlinkPath)
-                                    }
-                                    subscriber.putNext(MediaResourceData(path: symlinkPath, offset: data.offset, size: data.size, complete: data.complete))
-                                } else {
-                                    subscriber.putNext(data)
-                                }
-                            }
-                            if data.complete {
-                                subscriber.putCompletion()
-                            }
+                            self.deliverCachedRepresentationData(data, partialFallbackPath: paths.partial, pathExtension: pathExtension, complete: complete, subscriber: subscriber)
                         }, onlyComplete: complete))
                         if let currentData = context.currentData {
-                            if !complete || currentData.complete {
-                                subscriber.putNext(currentData)
-                            }
-                            if currentData.complete {
-                                subscriber.putCompletion()
-                            }
+                            self.deliverCachedRepresentationData(currentData, partialFallbackPath: paths.partial, pathExtension: pathExtension, complete: complete, subscriber: subscriber)
                         } else if !complete {
                             subscriber.putNext(MediaResourceData(path: paths.partial, offset: 0, size: 0, complete: false))
                         }
@@ -1265,76 +1560,21 @@ public final class MediaBox {
 
                         if !context.initialized {
                             context.initialized = true
-                            let cacheStorageBox = self.cacheStorageBox
+                            let stagingPartialPath = self.ephemeralCachePartialPath(for: paths.partial)
                             let signal = fetch()
                             |> deliverOn(self.dataQueue)
                             context.disposable.set(signal.startStrict(next: { [weak self, weak context] next in
-                                guard let strongSelf = self else {
+                                guard let strongSelf = self, let context else {
                                     return
                                 }
-                                var isDone = false
-                                switch next {
-                                case let .temporaryPath(temporaryPath):
-                                    rename(temporaryPath, paths.complete)
-                                    if let size = fileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
-                                        cacheStorageBox.update(id: pathData, size: size)
-                                    }
-                                    isDone = true
-                                case let .tempFile(tempFile):
-                                    rename(tempFile.path, paths.complete)
-                                    TempBox.shared.dispose(tempFile)
-                                    if let size = fileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
-                                        cacheStorageBox.update(id: pathData, size: size)
-                                    }
-                                    isDone = true
-                                case .reset:
-                                    let file = ManagedFile(queue: strongSelf.dataQueue, path: paths.partial, mode: .readwrite)
-                                    file?.truncate(count: 0)
-                                    unlink(paths.complete)
-                                    if let pathData = paths.complete.data(using: .utf8) {
-                                        cacheStorageBox.update(id: pathData, size: 0)
-                                    }
-                                case let .data(dataPart):
-                                    let file = ManagedFile(queue: strongSelf.dataQueue, path: paths.partial, mode: .append)
-                                    let dataCount = dataPart.count
-                                    dataPart.withUnsafeBytes { rawBytes -> Void in
-                                        let bytes = rawBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
-                                        let _ = file?.write(bytes, count: dataCount)
-                                    }
-                                    if let file = file, let size = file.getSize(), let pathData = paths.complete.data(using: .utf8) {
-                                        cacheStorageBox.update(id: pathData, size: size)
-                                    }
-                                case .done:
-                                    link(paths.partial, paths.complete)
-                                    isDone = true
-                                    if let size = fileSize(paths.complete), let pathData = paths.complete.data(using: .utf8) {
-                                        cacheStorageBox.update(id: pathData, size: size)
-                                    }
-                                }
-
-                                if let strongSelf = self, let currentContext = strongSelf.cachedRepresentationContexts[key], currentContext === context {
-                                    if isDone {
-                                        currentContext.disposable.dispose()
-                                        strongSelf.cachedRepresentationContexts.removeValue(forKey: key)
-                                    }
-                                    if let size = fileSize(paths.complete) {
-                                        let data = MediaResourceData(path: paths.complete, offset: 0, size: size, complete: isDone)
-                                        currentContext.currentData = data
-                                        for subscriber in currentContext.dataSubscribers.copyItems() {
-                                            if !subscriber.onlyComplete || isDone {
-                                                subscriber.update(data)
-                                            }
-                                        }
-                                    } else if let size = fileSize(paths.partial) {
-                                        let data = MediaResourceData(path: paths.partial, offset: 0, size: size, complete: isDone)
-                                        currentContext.currentData = data
-                                        for subscriber in currentContext.dataSubscribers.copyItems() {
-                                            if !subscriber.onlyComplete || isDone {
-                                                subscriber.update(data)
-                                            }
-                                        }
-                                    }
-                                }
+                                strongSelf.applyCachedRepresentationResult(
+                                    Optional(next),
+                                    logicalName: logicalName,
+                                    paths: paths,
+                                    stagingPartialPath: stagingPartialPath,
+                                    key: key,
+                                    context: context
+                                )
                             }))
                         }
                     }
@@ -1356,7 +1596,7 @@ public final class MediaBox {
     
     public func resourceUsage(id: MediaResourceId) -> Int64 {
         let paths = self.storePathsForId(id)
-        if let size = fileSize(paths.complete) {
+        if let size = self.logicalFileSize(paths.complete) {
             return Int64(size)
         } else if let size = fileSize(paths.partial, useTotalFileAllocatedSize: true) {
             return Int64(size)
@@ -1390,7 +1630,7 @@ public final class MediaBox {
                 for id in ids {
                     let wrappedId = id
                     let paths = self.storePathsForId(id)
-                    if let size = fileSize(paths.complete) {
+                    if let size = self.logicalFileSize(paths.complete) {
                         result[wrappedId] = Int64(size)
                     } else if let size = fileSize(paths.partial, useTotalFileAllocatedSize: true) {
                         result[wrappedId] = Int64(size)
@@ -1462,16 +1702,28 @@ public final class MediaBox {
                         return
                     }
                     
-                    storageBox.addEmptyReferencesIfNotReferenced(ids: results.map { name -> (id: Data, size: Int64) in
-                        let resourceId = MediaBox.idForFileName(name: name)
+                    storageBox.addEmptyReferencesIfNotReferenced(ids: results.compactMap { name -> (id: Data, size: Int64)? in
+                        if name.hasSuffix("_partial.meta") {
+                            return nil
+                        }
+                        let stripped = MediaBox.idForFileName(name: name)
+                        var resourceId = stripped
+                        if let keys = PostboxLocalEncryption.current, stripped.hasPrefix("enc_") {
+                            if let recovered = YougramChunkedFileCrypto.originalFileName(atPath: basePath + "/" + stripped, keys: keys) {
+                                resourceId = recovered
+                            }
+                        }
                         let paths = self.storePathsForId(MediaResourceId(resourceId))
                         var size: Int64 = 0
-                        if let value = fileSize(paths.complete) {
+                        if let value = self.logicalFileSize(paths.complete) {
                             size = value
                         } else if let value = fileSize(paths.partial) {
                             size = value
                         }
-                        return (resourceId.data(using: .utf8)!, size)
+                        guard let data = resourceId.data(using: .utf8) else {
+                            return nil
+                        }
+                        return (data, size)
                     }, contentType: otherResourceContentType, completion: { addedCount in
                         if addedCount != 0 {
                             postboxLog("UpdateResourceIndex: added \(addedCount) unreferenced ids")
@@ -1770,7 +2022,9 @@ public final class MediaBox {
                     }
                     
                     count += 1
-                    unlink(self.basePath + "/" + path)
+                    let targetPath = self.basePath + "/" + path
+                    unlink(targetPath)
+                    PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: targetPath)
                     reportProgress(count)
                 }
                 subscriber.putCompletion()
@@ -1838,6 +2092,7 @@ public final class MediaBox {
                     unlink(paths.complete)
                     unlink(paths.partial)
                     unlink(paths.partial + ".meta")
+                    PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
                     self.fileContexts.removeValue(forKey: id)
                     count += 3
                     reportProgress(count)
@@ -1950,6 +2205,7 @@ public final class MediaBox {
                     unlink(paths.complete)
                     unlink(paths.partial)
                     unlink(paths.partial + ".meta")
+                    PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: paths.complete)
                     self.fileContexts.removeValue(forKey: id)
                     removedIds.append(id)
                 }
@@ -1998,6 +2254,151 @@ public final class MediaBox {
                 subscriber.putCompletion()
             }
             return EmptyDisposable
+        }
+    }
+
+    // Yougram: live and standalone media directory encryption/decryption migration.
+    public func migrateMediaFiles(encrypt: Bool, keys: YougramVaultKeyMaterial, progress: ((Float) -> Void)? = nil) throws {
+        self.dataQueue.sync {
+            for (_, context) in self.cachedRepresentationContexts {
+                context.disposable.dispose()
+            }
+            self.cachedRepresentationContexts.removeAll()
+            self.fileContexts.removeAll()
+        }
+        try MediaBox.migrateMediaDirectoryStandalone(basePath: self.basePath, encrypt: encrypt, keys: keys, progress: { value in
+            progress?(value * 0.9)
+        })
+        let dbParams = encrypt ? keys.storageBoxDatabaseParameters : nil
+        try self.storageBox.rekey(to: dbParams)
+        try self.cacheStorageBox.rekey(to: dbParams)
+        PostboxLocalEncryption.ephemeralCache.purgeAllSessions()
+        progress?(1.0)
+    }
+
+    public static func migrateMediaDirectoryStandalone(
+        basePath: String,
+        encrypt: Bool,
+        keys: YougramVaultKeyMaterial,
+        progress: ((Float) -> Void)? = nil
+    ) throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: basePath) else {
+            progress?(1.0)
+            return
+        }
+
+        if encrypt {
+            let _ = try? fm.removeItem(atPath: basePath + "/animation-cache")
+        }
+
+        let subdirs = ["", "cache", "short-cache"]
+        var workItems: [(subdir: String, dirPath: String, name: String, fullPath: String)] = []
+
+        for subdir in subdirs {
+            let dirPath = subdir.isEmpty ? basePath : (basePath + "/" + subdir)
+            guard let names = try? fm.contentsOfDirectory(atPath: dirPath) else {
+                continue
+            }
+
+            var existingSet = Set(names)
+            for name in names {
+                if name.contains(".ygtmp-") || name.contains("_partial") {
+                    let itemPath = dirPath + "/" + name
+                    unlink(itemPath)
+                    existingSet.remove(name)
+                }
+            }
+
+            if encrypt {
+                // Remove extension hardlinks (<base>.<ext>) whose base exists in the same directory.
+                for name in names where existingSet.contains(name) {
+                    if let dotIdx = name.lastIndex(of: ".") {
+                        let baseName = String(name[..<dotIdx])
+                        if !baseName.isEmpty && existingSet.contains(baseName) {
+                            unlink(dirPath + "/" + name)
+                            existingSet.remove(name)
+                        }
+                    }
+                }
+            }
+
+            for name in existingSet.sorted() {
+                if name.hasPrefix(".") {
+                    continue
+                }
+                let fullPath = dirPath + "/" + name
+                var st = stat()
+                guard lstat(fullPath, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else {
+                    continue
+                }
+                workItems.append((subdir: subdir, dirPath: dirPath, name: name, fullPath: fullPath))
+            }
+        }
+
+        let total = workItems.count
+        if total == 0 {
+            progress?(1.0)
+            return
+        }
+
+        for (index, item) in workItems.enumerated() {
+            if encrypt {
+                let targetName: String
+                if item.subdir.isEmpty {
+                    targetName = PostboxLocalEncryption.obfuscatedFileName(for: item.name, keys: keys)
+                } else if let colonIdx = item.name.firstIndex(of: ":") {
+                    let idPart = String(item.name[..<colonIdx])
+                    let repPart = String(item.name[item.name.index(after: colonIdx)...])
+                    targetName = PostboxLocalEncryption.obfuscatedFileName(for: idPart, keys: keys) + ":" + PostboxLocalEncryption.obfuscatedFileName(for: repPart, keys: keys)
+                } else {
+                    targetName = PostboxLocalEncryption.obfuscatedFileName(for: item.name, keys: keys)
+                }
+                let targetPath = item.dirPath + "/" + targetName
+
+                if item.fullPath == targetPath {
+                    if YougramChunkedFileCrypto.readHeader(atPath: item.fullPath, keys: keys) == nil {
+                        try YougramChunkedFileCrypto.encryptFile(
+                            fromPath: item.fullPath,
+                            originalFileName: item.name,
+                            toPath: targetPath,
+                            keys: keys
+                        )
+                    }
+                } else {
+                    if YougramChunkedFileCrypto.readHeader(atPath: targetPath, keys: keys) == nil {
+                        if YougramChunkedFileCrypto.readHeader(atPath: item.fullPath, keys: keys) != nil {
+                            let _ = try? fm.removeItem(atPath: targetPath)
+                            try fm.moveItem(atPath: item.fullPath, toPath: targetPath)
+                        } else {
+                            try YougramChunkedFileCrypto.encryptFile(
+                                fromPath: item.fullPath,
+                                originalFileName: item.name,
+                                toPath: targetPath,
+                                keys: keys
+                            )
+                        }
+                    }
+                    unlink(item.fullPath)
+                }
+            } else {
+                if YougramChunkedFileCrypto.isChunkedFile(atPath: item.fullPath) {
+                    var restoredName = YougramChunkedFileCrypto.originalFileName(atPath: item.fullPath, keys: keys) ?? item.name
+                    restoredName = restoredName.replacingOccurrences(of: "/", with: "_")
+                    if restoredName.isEmpty || restoredName == "." || restoredName == ".." {
+                        restoredName = item.name
+                    }
+                    let targetPath = item.dirPath + "/" + restoredName
+                    try YougramChunkedFileCrypto.decryptFile(fromPath: item.fullPath, toPath: targetPath, keys: keys, protection: nil)
+                    if targetPath != item.fullPath {
+                        unlink(item.fullPath)
+                    }
+                }
+            }
+
+            if index % 16 == 0 || index + 1 == total {
+                progress?(Float(index + 1) / Float(total))
+            }
         }
     }
 

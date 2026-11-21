@@ -378,7 +378,9 @@ public final class AccountContextImpl: AccountContext {
         self.cachedGroupCallContexts = AccountGroupCallContextCacheImpl()
         
         let cacheStorageBox = self.account.postbox.mediaBox.cacheStorageBox
-        self.animationCache = DCTAnimationCacheImpl(basePath: self.engine.resources.mediaBasePath + "/animation-cache", allocateTempFile: {
+        // Yougram: store animation-cache in ephemeral session directory when local encryption is active.
+        let animationCacheBasePath = YougramLocalEncryptionBridge.isActive ? YougramLocalEncryptionBridge.ephemeralAnimationCachePath() : (self.engine.resources.mediaBasePath + "/animation-cache")
+        self.animationCache = DCTAnimationCacheImpl(basePath: animationCacheBasePath, allocateTempFile: {
             return EngineTempBox.shared.tempFile(fileName: "file").path
         }, updateStorageStats: { path, size in
             if let pathData = path.data(using: .utf8) {

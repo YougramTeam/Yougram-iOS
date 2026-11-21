@@ -78,7 +78,12 @@ private final class TempBoxContexts {
             context = TempBoxFileContext(directory: dirPath, fileName: sanitizedTempBoxFileName(fileName))
             self.contexts[key] = context
             let _ = try? FileManager.default.createDirectory(atPath: dirPath, withIntermediateDirectories: true, attributes: nil)
-            let _ = try? FileManager.default.linkItem(atPath: path, toPath: context.path)
+            // Yougram: cross-container hardlinks fail when TempBox lives in ephemeral NSTemporaryDirectory; fall back to copy.
+            do {
+                try FileManager.default.linkItem(atPath: path, toPath: context.path)
+            } catch {
+                let _ = try? FileManager.default.copyItem(atPath: path, toPath: context.path)
+            }
         }
         let id = self.nextId
         self.nextId += 1
@@ -149,12 +154,21 @@ public final class TempBox {
     private let basePath: String
     private let processType: String
     private let launchSpecificId: Int64
-    private let currentBasePath: String
+    private var currentBasePath: String
     
     private let contexts = Atomic<TempBoxContexts>(value: TempBoxContexts())
     
     public static func initializeShared(basePath: String, processType: String, launchSpecificId: Int64) {
         sharedValue = TempBox(basePath: basePath, processType: processType, launchSpecificId: launchSpecificId)
+    }
+
+    // Yougram: switch shared TempBox directory cleanly during live encryption enable/disable.
+    public func reconfigureBasePath(_ newBasePath: String) {
+        let updatedPath = newBasePath + "/temp/" + self.processType + "/temp-" + String(UInt64(bitPattern: self.launchSpecificId), radix: 16)
+        self.contexts.with { _ in
+            self.currentBasePath = updatedPath
+        }
+        self.cleanupPreviousLaunches(path: newBasePath + "/temp/" + self.processType, currentLaunchSpecificId: self.launchSpecificId)
     }
     
     public static var shared: TempBox {

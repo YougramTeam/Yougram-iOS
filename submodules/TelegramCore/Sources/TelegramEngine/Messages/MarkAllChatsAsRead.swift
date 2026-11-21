@@ -6,6 +6,10 @@ import MtProtoKit
 
 
 func _internal_markAllChatsAsRead(postbox: Postbox, network: Network, stateManager: AccountStateManager) -> Signal<Void, NoError> {
+    // Yougram: Ghost Mode keeps read receipts from being pushed when marking all chats as read.
+    if YougramCoreOptions.ghostMode.hideReadReceipts {
+        return .complete()
+    }
     return network.request(Api.functions.messages.getDialogUnreadMarks(flags: 0, parentPeer: nil))
     |> map(Optional.init)
     |> `catch` { _ -> Signal<[Api.DialogPeer]?, NoError> in

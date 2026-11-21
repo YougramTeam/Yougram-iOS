@@ -85,14 +85,21 @@ public final class NotificationViewControllerImpl {
         view.addSubnode(self.imageNode)
         
         let rootPath = rootPathForBasePath(self.initializationData.appGroupPath)
-        performAppGroupUpgrades(appGroupPath: self.initializationData.appGroupPath, rootPath: rootPath)
-        
-        EngineTempBox.initializeShared(basePath: rootPath, processType: "notification-content", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
-        
-        let logsPath = rootPath + "/logs/notificationcontent-logs"
-        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-        
-        setupSharedLogger(rootPath: rootPath, path: logsPath)
+        if YougramLocalEncryptionBridge.isActive {
+            EngineTempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "notification-content", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            let logsPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+            setupSharedLogger(rootPath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), path: logsPath)
+            Logger.shared.logToFile = false
+        } else {
+            performAppGroupUpgrades(appGroupPath: self.initializationData.appGroupPath, rootPath: rootPath)
+            
+            EngineTempBox.initializeShared(basePath: rootPath, processType: "notification-content", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            
+            let logsPath = rootPath + "/logs/notificationcontent-logs"
+            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+            
+            setupSharedLogger(rootPath: rootPath, path: logsPath)
+        }
         
         accountsPath = rootPath
         

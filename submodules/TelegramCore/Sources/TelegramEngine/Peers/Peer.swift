@@ -562,6 +562,10 @@ public extension EnginePeer {
         return self._asPeer().profileBackgroundEmojiId
     }
 
+    var isServerCopyProtectionEnabled: Bool {
+        return self._asPeer().isServerCopyProtectionEnabled
+    }
+
     var isCopyProtectionEnabled: Bool {
         return self._asPeer().isCopyProtectionEnabled
     }

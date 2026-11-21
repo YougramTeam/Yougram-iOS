@@ -17,7 +17,8 @@ public func updateLoggingSettings(accountManager: AccountManager<TelegramAccount
         })
         
         if let updated = updated {
-            Logger.shared.logToFile = updated.logToFile
+            // Yougram: keep file logging off while local encryption is active.
+            Logger.shared.logToFile = updated.logToFile && !PostboxLocalEncryption.isActive
             Logger.shared.logToConsole = updated.logToConsole
             Logger.shared.redactSensitiveData = updated.redactSensitiveData
         }

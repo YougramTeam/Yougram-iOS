@@ -7,6 +7,7 @@ import TelegramCore
 import UndoUI
 import ContextUI
 import TelegramPresentationData
+import YougramSettingsUI
 import NotificationPeerExceptionController
 import NotificationExceptionsScreen
 import TranslateUI
@@ -1276,6 +1277,19 @@ extension PeerInfoScreenNode {
                             })))
                         }
                     }
+                }
+
+                // Yougram: View Deleted shortcut in PeerInfo More menu when Anti-Recall is enabled.
+                if YougramCoreOptions.saveDeletedMessages {
+                    items.append(.action(ContextMenuActionItem(text: presentationData.strings.Yougram_History_ViewDeleted, icon: { theme in
+                        generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.primaryColor)
+                    }, action: { [weak self] _, f in
+                        f(.dismissWithoutContent)
+                        guard let self else {
+                            return
+                        }
+                        self.controller?.push(yougramDeletedMessagesController(context: self.context, peerId: peer.id, peerTitle: peer.compactDisplayTitle))
+                    })))
                 }
                 
                 return .single(items)

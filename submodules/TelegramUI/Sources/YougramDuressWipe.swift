@@ -5,6 +5,8 @@ import TelegramUIPreferences
 import AccountContext
 import WalletContext
 import YougramSettingsUI
+import PasscodeCore
+import BuildConfig
 
 /// Settings ▸ Yougram ▸ Privacy ▸ Duress Code: what entering the duress code on the lock screen
 /// does (installed as `AppLockContext.duressCodeHandler` in `AppDelegate`).
@@ -21,6 +23,20 @@ func yougramPerformDuressWipe(sharedContext: SharedAccountContextImpl, appLockCo
     let accountManager = sharedContext.accountManager
     let settings = YougramSettings.current
     Logger.shared.log("Yougram", "duress code: signing out (deleteBackup: \(settings.duressDeleteBackup), logOutOnServers: \(settings.duressTerminateSessions))")
+
+    let vaultWasEnabled = YougramVaultStore.shared.isEnabled(rootPath: sharedContext.basePath)
+    if vaultWasEnabled && !settings.duressTerminateSessions {
+        if settings.duressDeleteBackup {
+            let _ = YougramAccountsBackupStore.deleteAll()
+        }
+        YougramVaultStore.shared.cryptoShredAndWipeAllData(
+            rootPath: sharedContext.basePath,
+            appGroupPath: sharedContext.applicationBindings.containerPath
+        )
+        try? resetWalletLocalSecrets()
+        YougramLocalEncryptionCoordinator.purgeSystemCachesAndIndexes()
+        exit(0)
+    }
 
     let backupRemoved: Signal<Void, NoError>
     if settings.duressDeleteBackup {
@@ -88,6 +104,15 @@ func yougramPerformDuressWipe(sharedContext: SharedAccountContextImpl, appLockCo
     |> then(accountsInactive)
     |> then(passcodeRemoved)
     |> deliverOnMainQueue).start(completed: {
-        appLockContext.unlock()
+        if vaultWasEnabled {
+            YougramVaultStore.shared.cryptoShredAndWipeAllData(
+                rootPath: sharedContext.basePath,
+                appGroupPath: sharedContext.applicationBindings.containerPath
+            )
+            YougramLocalEncryptionCoordinator.purgeSystemCachesAndIndexes()
+            exit(0)
+        } else {
+            appLockContext.unlock()
+        }
     })
 }

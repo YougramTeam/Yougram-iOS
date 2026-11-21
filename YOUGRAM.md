@@ -60,20 +60,52 @@ lives, and how to add more. It is imported at the end of `CLAUDE.md`, so it load
   or id (`PeerInfo/PeerInfoScreen/Sources/ListItems/PeerInfoScreenAccountsBoxItem.swift`).
 - Free voice transcription with Apple's speech recognition (`localVoiceTranscription`;
   `ChatMessageInteractiveFileNode`, `ChatMessageInteractiveInstantVideoNode`).
-- Hide sponsored content (`hideAds`): channel and bot ads, video ads, search results and promoted chats.
+- Hide sponsored content (`hideAds`): channel and bot ads, video ads, search results and promoted chats, plus
+  suppressing `messages.getSponsoredMessages` network/cache loads in `TelegramCore` (`AdMessages.swift`).
 
 **Privacy**
 - **Ghost Mode** (`ghostModeEnabled` and one switch per part): no read receipts, voice and video messages not marked
   played, story views not counted, no online status, no typing, upload, sticker or other activity indicators; plus Go
-  Offline Automatically, Read on Interact (a sent message or reaction sends the reads held in that chat), Send as
-  Scheduled (12 s ahead) and Ask Before Opening Stories. TelegramCore follows `YougramCoreOptions.ghostMode`; the hooks,
-  the held-reads list and its limits are in `submodules/YougramSettingsUI/CLAUDE.md`, "Ghost Mode", and
-  `docs/state-sync.md` invariant 31.
+  Offline Automatically, Read on Interact (a sent message or reaction sends the reads held in that chat, and turning
+  Ghost Mode off flushes stale held reads on interaction), Send as Scheduled (12 s ahead) and Ask Before Opening
+  Stories (moved to Privacy). Sub-switches lock visually OFF while `ghostModeEnabled` is off, and disabling all
+  sub-features turns Ghost Mode off; `AccountPresenceManagerImpl` reacts immediately to Ghost Mode changes and
+  `TypingDraftStop`, `ManagedLocalInputActivities`, `AccountViewTracker`, `MarkAllChatsAsRead`,
+  `ManagedSynchronizeMarkAllUnseenPersonalMessagesOperations`, and `ManagedSynchronizeViewStoriesOperations` suppress
+  activity/read leaks. TelegramCore follows `YougramCoreOptions.ghostMode`; the hooks, the held-reads list and its
+  limits are in `submodules/YougramSettingsUI/CLAUDE.md`, "Ghost Mode", and `docs/state-sync.md` invariant 31.
+- **Local History** (Settings ▸ Yougram ▸ Privacy ▸ Local History; `YougramMessageHistory.swift`,
+  `YougramLocalHistoryController.swift`):
+  - **Anti-Recall** (`saveDeletedMessages`, off by default): snapshots deleted Cloud messages (excluding service actions
+    and self-destructing/view-once messages) before `StateReplay+Messages` deletes them; accessible via **View Deleted**
+    in the chat navigation avatar menu and `PeerInfoScreen` more menu.
+  - **Edit History** (`saveEditHistory`, off by default): stores previous text versions before
+    `StateReplay+Messages.applyEditMessage` overwrites a message; accessible via **Edit History** in the message
+    context menu.
+  - Stored locally inside Postbox (`yougramMessageHistory` item cache + `yougramMessageHistoryIndex` preferences), so it
+    is automatically encrypted when Local Encryption is active.
+- **Allow Copy & Download** (`allowCopyProtectedContent`, off by default): removes client-side restrictions on copying,
+  text selection, saving media/files, translating, speaking, and screenshots across copy-protected chats, channels, and
+  stories (`MessageUtils.swift`, `PeerUtils.swift`, `PeersData.swift`, gallery, media auto-save, and
+  `StoryContainerScreen`). Server-side forwarding (`Forward`) stays disabled on server copy-protected items where the
+  server rejects `forwardMessages`.
+- **Hide Blocked Users' Messages** (`hideBlockedUsersMessages`, off by default; `YougramBlockedPeers.swift`): maintains
+  a per-account local index (`yougramBlockedPeerIds`) synchronized from `contacts.getBlocked` and block/unblock state
+  changes, and locally hides messages authored by blocked users in shared groups, channels, and discussion threads
+  (`ChatHistoryEntriesForView.swift`).
 - Hide phone number in Settings and in your own profile (`hidePhoneInSettings`; PeerInfo header and items).
 - Hide account name in notifications (`hideAccountNameInNotifications`): `Telegram/NotificationService` reads the
   shared-data entry itself.
 - Scrambled passcode keypad, and the duress code (a second passcode that signs out of every account on the device):
   how both work and their invariants are in `submodules/YougramSettingsUI/CLAUDE.md`, "Passcode".
+- **Local Encryption** (Settings ▸ Yougram ▸ Privacy ▸ Local Encryption): optional full at-rest encryption across
+  every SQLCipher DB (`postbox`, `accounts-metadata`, `guard_db`, `StorageBox`), `atomic-state`/`login-tokens` (`YGE1`),
+  and `MediaBox` files (`YGCF` chunked GCM + `YGPR` CTR sparse partials + HMAC-obfuscated `enc_*` filenames), deleting
+  `.tempkey`, persistent logs, Spotlight indexes, and UserDefaults mirrors; supports Dedicated Password/PIN or App
+  Passcode Lock binding and Strict vs Extensions-Allowed Keychain modes (`YougramLocalEncryption.swift`,
+  `YougramCoreEncryption.swift`, `YougramVaultStore.swift`, `YougramVaultUnlockController.swift`,
+  `YougramLocalEncryptionCoordinator.swift`, `YougramLocalEncryptionController.swift`). Details in
+  `submodules/YougramSettingsUI/CLAUDE.md`.
 
 **Chats**
 - Quick Formatting panel above the keyboard (`YougramQuickFormattingPanel.swift`, `ChatTextInputPanelNode`).
@@ -86,8 +118,8 @@ lives, and how to add more. It is imported at the end of `CLAUDE.md`, so it load
   menus and profile shared media. Shared logic is in `SaveToCameraRoll/Sources/SaveMediaInteractively.swift`
   (`messageSaveableMedia`, `fetchMediaDataInteractively`) and `LegacyMediaPickerUI/Sources/ExportMediaToFiles.swift`;
   the profile items are `PeerInfoScreenSaveMedia.swift`.
-  - Invariants: saving stays hidden exactly where upstream hides it (copy-protected chats or messages, secret media,
-    paid media).
+  - Invariants: saving stays hidden where upstream hides it (copy-protected chats or messages unless **Allow Copy &
+    Download** is enabled, secret media, paid media).
   - A streamed video's original file is saved only once it is downloaded; the gallery's quality list offers the
     original to Premium users only, as upstream does (`allowsStreamedVideoOriginal`).
   - Files go through the system export picker: the app's Documents folder holds internal data, so it can't be exposed
@@ -110,3 +142,14 @@ lives, and how to add more. It is imported at the end of `CLAUDE.md`, so it load
   (`keepBottomSearch`).
 - Hide stories, disable swipe to the story camera, hide "Repost to Story".
 - Reduce Liquid Glass (`reduceGlass`: `GlassBackgroundView.useCustomGlassImpl` in `SharedAccountContext`).
+
+**Sideloading & Unsigned IPA**
+- **Resilient App Group, Keychain, and Code-Signature Parsing** (`BuildConfig.m`, `BuildConfigExtra.m`, `AppDelegate.swift`,
+  `Passcode.swift`, `YougramVaultStore.swift`, `WalletSecurity.swift`, `WalletStorage.swift`, and app extensions):
+  probes the embedded provisioning profile's `application-groups` entitlement and falls back cleanly to a sandbox
+  `Application Support/YougramGroup` directory and ungrouped keychain queries instead of failing with `"Error 2"` or
+  crashing with `errSecMissingEntitlement` / out-of-bounds Mach-O signature reads when re-signed by third-party signers
+  that rename the bundle identifier or strip/omit App Group entitlements.
+- **Unsigned IPA workflow** (`.github/workflows/build-ipa.yml`): defaults `signing` to `unsigned`, strips
+  `_CodeSignature`, `embedded.mobileprovision`, `CodeResources`, `SC_Info`, and Mach-O signatures (`codesign --remove-signature`)
+  and uploads `Yougram-<version>-<build>-<config>-unsigned.ipa` as a GitHub Actions artifact with no TestFlight upload.

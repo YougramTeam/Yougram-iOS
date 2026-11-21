@@ -9,6 +9,7 @@ import ItemListUI
 import PresentationDataUtils
 import AccountContext
 import UndoUI
+import PasscodeCore
 
 private let yougramPurple = [UIColor(rgb: 0xB78EFF), UIColor(rgb: 0x6233E0)]
 
@@ -27,7 +28,7 @@ private enum YougramScreen {
     case contextMenu
 }
 
-private func yougramEntries(screen: YougramScreen, settings: YougramSettings, strings: PresentationStrings) -> [YougramSettingsEntry] {
+private func yougramEntries(screen: YougramScreen, settings: YougramSettings, localEncryptionEnabled: Bool, strings: PresentationStrings) -> [YougramSettingsEntry] {
     var b = YougramEntriesBuilder()
     switch screen {
     case .main:
@@ -58,6 +59,20 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, st
         b.link(strings.Yougram_Ghost_Title, label: settings.ghostModeEnabled ? strings.Yougram_Ghost_On : strings.Yougram_Ghost_Off, to: .ghostMode)
         b.info(strings.Yougram_Privacy_GhostModeInfo)
         b.newSection()
+        b.toggle(strings.Yougram_Ghost_StoryWarning, settings, \.ghostStoryWarning)
+        b.info(strings.Yougram_Ghost_StoryWarningInfo)
+        b.newSection()
+        b.link(strings.Yougram_Privacy_LocalEncryption, label: localEncryptionEnabled ? strings.Yougram_Encryption_On : strings.Yougram_Encryption_Off, to: .localEncryption)
+        b.newSection()
+        b.link(strings.Yougram_Privacy_LocalHistory, label: (settings.saveDeletedMessages || settings.saveEditHistory) ? strings.Yougram_Ghost_On : strings.Yougram_Ghost_Off, to: .localHistory)
+        b.info(strings.Yougram_Privacy_LocalHistoryInfo)
+        b.newSection()
+        b.toggle(strings.Yougram_Privacy_AllowCopyProtected, settings, \.allowCopyProtectedContent)
+        b.info(strings.Yougram_Privacy_AllowCopyProtectedInfo)
+        b.newSection()
+        b.toggle(strings.Yougram_Privacy_HideBlockedUsers, settings, \.hideBlockedUsersMessages)
+        b.info(strings.Yougram_Privacy_HideBlockedUsersInfo)
+        b.newSection()
         b.toggle(strings.Yougram_Privacy_HidePhone, settings, \.hidePhoneInSettings)
         b.info(strings.Yougram_Privacy_HidePhoneInfo)
         b.newSection()
@@ -73,32 +88,29 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, st
         b.info(strings.Yougram_Ghost_EnableInfo)
         b.newSection()
         b.header(strings.Yougram_Ghost_DontSend)
-        b.toggle(strings.Yougram_Ghost_ReadReceipts, settings, \.ghostHideReadReceipts)
-        b.toggle(strings.Yougram_Ghost_VoiceListened, settings, \.ghostHideVoiceListened)
-        b.toggle(strings.Yougram_Ghost_RoundWatched, settings, \.ghostHideRoundWatched)
-        b.toggle(strings.Yougram_Ghost_StoryViews, settings, \.ghostHideStoryViews)
-        b.toggle(strings.Yougram_Ghost_Online, settings, \.ghostHideOnline)
+        b.toggle(strings.Yougram_Ghost_ReadReceipts, settings, \.ghostHideReadReceipts, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_VoiceListened, settings, \.ghostHideVoiceListened, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_RoundWatched, settings, \.ghostHideRoundWatched, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_StoryViews, settings, \.ghostHideStoryViews, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_Online, settings, \.ghostHideOnline, enabled: settings.ghostModeEnabled)
         b.info(strings.Yougram_Ghost_DontSendInfo)
         b.newSection()
         b.header(strings.Yougram_Ghost_Activity)
-        b.toggle(strings.Yougram_Ghost_Typing, settings, \.ghostHideTyping)
-        b.toggle(strings.Yougram_Ghost_Uploading, settings, \.ghostHideUploading)
-        b.toggle(strings.Yougram_Ghost_ChoosingSticker, settings, \.ghostHideChoosingSticker)
-        b.toggle(strings.Yougram_Ghost_OtherActivities, settings, \.ghostHideOtherActivities)
+        b.toggle(strings.Yougram_Ghost_Typing, settings, \.ghostHideTyping, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_Uploading, settings, \.ghostHideUploading, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_ChoosingSticker, settings, \.ghostHideChoosingSticker, enabled: settings.ghostModeEnabled)
+        b.toggle(strings.Yougram_Ghost_OtherActivities, settings, \.ghostHideOtherActivities, enabled: settings.ghostModeEnabled)
         b.info(strings.Yougram_Ghost_ActivityInfo)
         b.newSection()
         b.header(strings.Yougram_Ghost_Options)
-        b.toggle(strings.Yougram_Ghost_AutoOffline, settings, \.ghostAutoOffline)
+        b.toggle(strings.Yougram_Ghost_AutoOffline, settings, \.ghostAutoOffline, enabled: settings.ghostModeEnabled)
         b.info(strings.Yougram_Ghost_AutoOfflineInfo)
         b.newSection()
-        b.toggle(strings.Yougram_Ghost_ReadOnInteract, settings, \.ghostReadOnInteract)
+        b.toggle(strings.Yougram_Ghost_ReadOnInteract, settings, \.ghostReadOnInteract, enabled: settings.ghostModeEnabled && settings.ghostHideReadReceipts)
         b.info(strings.Yougram_Ghost_ReadOnInteractInfo)
         b.newSection()
-        b.toggle(strings.Yougram_Ghost_SendAsScheduled, settings, \.ghostSendAsScheduled)
+        b.toggle(strings.Yougram_Ghost_SendAsScheduled, settings, \.ghostSendAsScheduled, enabled: settings.ghostModeEnabled)
         b.info(strings.Yougram_Ghost_SendAsScheduledInfo)
-        b.newSection()
-        b.toggle(strings.Yougram_Ghost_StoryWarning, settings, \.ghostStoryWarning)
-        b.info(strings.Yougram_Ghost_StoryWarningInfo)
     case .appearance:
         b.header(strings.Yougram_Appearance_ChatList)
         b.toggle(strings.Yougram_Appearance_CompactChatList, settings, \.compactChatList)
@@ -223,9 +235,28 @@ private func yougramScreenController(context: AccountContext, screen: YougramScr
     let arguments = YougramSettingsArguments(updateToggle: { key, value, requiresRestart in
         let _ = updateYougramSettingsInteractively(accountManager: context.sharedContext.accountManager, { settings in
             var settings = settings
+            if screen == .ghostMode && key != \.ghostModeEnabled && !settings.ghostModeEnabled {
+                return settings
+            }
             settings[keyPath: key] = value
+            if key == \.ghostModeEnabled && value == true && !settings.hasAnyGhostFeatureEnabled {
+                settings.ghostHideReadReceipts = true
+                settings.ghostHideVoiceListened = true
+                settings.ghostHideRoundWatched = true
+                settings.ghostHideStoryViews = true
+                settings.ghostHideOnline = true
+                settings.ghostHideTyping = true
+                settings.ghostHideUploading = true
+                settings.ghostHideChoosingSticker = true
+                settings.ghostHideOtherActivities = true
+            } else if screen == .ghostMode && key != \.ghostModeEnabled && settings.ghostModeEnabled && !settings.hasAnyGhostFeatureEnabled {
+                settings.ghostModeEnabled = false
+            }
             return settings
         }).start()
+        if key == \.hideBlockedUsersMessages && value == true {
+            let _ = context.engine.privacy.yougramRefreshBlockedPeers().startStandalone()
+        }
         if requiresRestart {
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
             presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: presentationData.strings.Yougram_Settings_RestartNotice, timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }))
@@ -254,6 +285,10 @@ private func yougramScreenController(context: AccountContext, screen: YougramScr
             pushControllerImpl?(yougramScreenController(context: context, screen: .privacy))
         case .ghostMode:
             pushControllerImpl?(yougramScreenController(context: context, screen: .ghostMode))
+        case .localEncryption:
+            pushControllerImpl?(yougramLocalEncryptionController(context: context))
+        case .localHistory:
+            pushControllerImpl?(yougramLocalHistoryController(context: context))
         case .contextMenu:
             pushControllerImpl?(yougramScreenController(context: context, screen: .contextMenu))
         case .accountsBackup:
@@ -268,11 +303,13 @@ private func yougramScreenController(context: AccountContext, screen: YougramScr
     }, performAction: { _ in
     })
 
-    let signal = combineLatest(context.sharedContext.presentationData, YougramSettings.updates)
+    let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+    let signal = combineLatest(context.sharedContext.presentationData, YougramSettings.updates, .single(()) |> then(YougramVaultStore.shared.stateChanges))
     |> deliverOnMainQueue
-    |> map { presentationData, settings -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, settings, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let localEncryptionEnabled = YougramVaultStore.shared.isEnabled(rootPath: rootPath)
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(yougramTitle(screen, strings: presentationData.strings)), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: yougramEntries(screen: screen, settings: settings, strings: presentationData.strings), style: .blocks, animateChanges: false)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: yougramEntries(screen: screen, settings: settings, localEncryptionEnabled: localEncryptionEnabled, strings: presentationData.strings), style: .blocks, animateChanges: screen == .ghostMode)
         return (controllerState, (listState, arguments))
     }
 

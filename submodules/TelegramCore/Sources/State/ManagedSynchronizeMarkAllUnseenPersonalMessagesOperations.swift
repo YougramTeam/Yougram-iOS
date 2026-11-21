@@ -117,6 +117,10 @@ private enum GetUnseenIdsError {
 }
 
 private func synchronizeMarkAllUnseen(transaction: Transaction, postbox: Postbox, network: Network, stateManager: AccountStateManager, peerId: PeerId, operation: SynchronizeMarkAllUnseenPersonalMessagesOperation) -> Signal<Void, NoError> {
+    // Yougram: Ghost Mode keeps read receipts for mentions on this device.
+    if YougramCoreOptions.ghostMode.hideReadReceipts {
+        return .complete()
+    }
     guard let inputPeer = transaction.getPeer(peerId).flatMap(apiInputPeer) else {
         return .complete()
     }
@@ -284,6 +288,10 @@ func managedSynchronizeMarkAllUnseenReactionsOperations(postbox: Postbox, networ
 }
 
 private func synchronizeMarkAllUnseenReactions(transaction: Transaction, postbox: Postbox, network: Network, stateManager: AccountStateManager, peerId: PeerId, operation: SynchronizeMarkAllUnseenReactionsOperation) -> Signal<Void, NoError> {
+    // Yougram: Ghost Mode keeps reaction read receipts on this device.
+    if YougramCoreOptions.ghostMode.hideReadReceipts {
+        return .complete()
+    }
     guard let peer = transaction.getPeer(peerId) else {
         return .complete()
     }
@@ -380,6 +388,10 @@ func managedSynchronizeMarkAllUnseenPollVotesOperations(postbox: Postbox, networ
 }
 
 private func synchronizeMarkAllUnseenPollVotes(transaction: Transaction, postbox: Postbox, network: Network, stateManager: AccountStateManager, peerId: PeerId, operation: SynchronizeMarkAllUnseenReactionsOperation) -> Signal<Void, NoError> {
+    // Yougram: Ghost Mode keeps poll vote read receipts on this device.
+    if YougramCoreOptions.ghostMode.hideReadReceipts {
+        return .complete()
+    }
     guard let peer = transaction.getPeer(peerId) else {
         return .complete()
     }

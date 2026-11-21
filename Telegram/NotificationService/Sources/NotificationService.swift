@@ -795,33 +795,49 @@ private final class NotificationServiceHandler {
         let apiHash: String = buildConfig.apiHash
         let languagesCategory = "ios"
 
-        let appGroupName = "group.\(baseAppBundleId)"
-        try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-
-        guard let appGroupUrl = maybeAppGroupUrl else {
-            return nil
-        }
+        let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+        try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
+        let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
 
         let rootPath = rootPathForBasePath(appGroupUrl.path)
 
-        TempBox.initializeShared(basePath: rootPath, processType: "notification", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        let vaultAccess = resolveExtensionEncryptionParameters(rootPath: rootPath)
+        switch vaultAccess {
+        case .disabled:
+            TempBox.initializeShared(basePath: rootPath, processType: "notification", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
 
-        let logsPath = rootPath + "/logs/notification-logs"
-        let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+            let logsPath = rootPath + "/logs/notification-logs"
+            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
 
-        setupSharedLogger(rootPath: logsPath, path: logsPath)
-        
-        Logger.shared.log("NotificationService \(episode)", "Started handling notification")
+            setupSharedLogger(rootPath: logsPath, path: logsPath)
+            
+            Logger.shared.log("NotificationService \(episode)", "Started handling notification")
 
-        initializeAccountManagement()
+            initializeAccountManagement()
+
+            self.accountManager = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: true, isReadOnly: false, useCaches: false, removeDatabaseOnError: false)
+
+            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+            self.encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+        case let .unlocked(params):
+            TempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "notification", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+            let logsPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+            setupSharedLogger(rootPath: logsPath, path: logsPath)
+            Logger.shared.logToFile = false
+
+            initializeAccountManagement()
+            self.accountManager = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: true, isReadOnly: false, useCaches: false, removeDatabaseOnError: false)
+            self.encryptionParameters = params
+        case .locked:
+            let ephemeralLogs = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+            setupSharedLogger(rootPath: ephemeralLogs, path: ephemeralLogs)
+            Logger.shared.logToFile = false
+            updateCurrentContent(NotificationContent(isLockedMessage: "You have a new message"))
+            completed()
+            return nil
+        }
 
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
-
-        self.accountManager = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: true, isReadOnly: false, useCaches: false, removeDatabaseOnError: false)
-
-        let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-        self.encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
         
         let semaphore = DispatchSemaphore(value: 0)
         var loggingSettings = LoggingSettings.defaultSettings
@@ -844,7 +860,7 @@ private final class NotificationServiceHandler {
         
         Logger.shared.log("NotificationService \(episode)", "Logging settings: (logToFile: \(loggingSettings.logToFile))")
         
-        Logger.shared.logToFile = loggingSettings.logToFile
+        Logger.shared.logToFile = loggingSettings.logToFile && !YougramLocalEncryptionBridge.isActive
         Logger.shared.logToConsole = loggingSettings.logToConsole
         Logger.shared.redactSensitiveData = loggingSettings.redactSensitiveData
 
@@ -2744,6 +2760,9 @@ final class NotificationService: UNNotificationServiceExtension {
                         } else if let initialContent = strongSelf.initialContent {
                             contentHandler(initialContent)
                         }
+                        if YougramLocalEncryptionBridge.isActive {
+                            purgeExtensionEphemeralCache()
+                        }
                     } else {
                         Logger.shared.log("NotificationService \(episode)", "Attempted to repeatedly complete handling notification")
                     }
@@ -2770,6 +2789,9 @@ final class NotificationService: UNNotificationServiceExtension {
                 contentHandler(content.generate())
             } else if let initialContent = self.initialContent {
                 contentHandler(initialContent)
+            }
+            if YougramLocalEncryptionBridge.isActive {
+                purgeExtensionEphemeralCache()
             }
         }
     }

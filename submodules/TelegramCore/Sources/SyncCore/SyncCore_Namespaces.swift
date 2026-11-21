@@ -172,6 +172,8 @@ public struct Namespaces {
         public static let shareThemeBackdrops: Int8 = 61
         public static let cachedUniqueStarGifts: Int8 = 62
         public static let cachedAgent: Int8 = 63
+        // Yougram: above applicationSpecificItemCacheCollectionId (starts at 64).
+        public static let yougramMessageHistory: Int8 = 120
     }
     
     public struct UnorderedItemList {
@@ -357,6 +359,8 @@ private enum PreferencesKeyValues: Int32 {
     case stateSyncDebugSettings = 52
     // Yougram: far above upstream's keys, so a key Telegram adds can't collide.
     case yougramGhostHeldReads = 900
+    case yougramMessageHistoryIndex = 901
+    case yougramBlockedPeerIds = 902
 }
 
 public func applicationSpecificPreferencesKey(_ value: Int32) -> ValueBoxKey {
@@ -648,6 +652,20 @@ public struct PreferencesKeys {
     static let yougramGhostHeldReads: ValueBoxKey = {
         let key = ValueBoxKey(length: 4)
         key.setInt32(0, value: PreferencesKeyValues.yougramGhostHeldReads.rawValue)
+        return key
+    }()
+
+    /// Yougram: local deleted/edited message history index.
+    static let yougramMessageHistoryIndex: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.yougramMessageHistoryIndex.rawValue)
+        return key
+    }()
+
+    /// Yougram: cached list of blocked user peer ids for local message filtering.
+    static let yougramBlockedPeerIds: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.yougramBlockedPeerIds.rawValue)
         return key
     }()
 

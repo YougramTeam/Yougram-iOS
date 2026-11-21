@@ -1133,22 +1133,31 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             
             let enableSpotlight = accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.intentsSettings]))
             |> map { sharedData -> Bool in
+                // Yougram: disable CoreSpotlight indexing while local encryption is active.
+                if YougramLocalEncryptionBridge.isActive {
+                    return false
+                }
                 let intentsSettings: IntentsSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.intentsSettings]?.get(IntentsSettings.self) ?? .defaultSettings
                 return intentsSettings.contacts
             }
             |> distinctUntilChanged
-            self.spotlightDataContext = SpotlightDataContext(appBasePath: applicationBindings.containerPath, accountManager: accountManager, accounts: combineLatest(enableSpotlight, self.activeAccountContexts
-            |> map { _, accounts, _ in
-                return accounts.map { _, account, _ in
-                    return account.account
-                }
-            }) |> map { enableSpotlight, accounts in
-                if enableSpotlight {
-                    return accounts
-                } else {
-                    return []
-                }
-            })
+            if !YougramLocalEncryptionBridge.isActive {
+                self.spotlightDataContext = SpotlightDataContext(appBasePath: applicationBindings.containerPath, accountManager: accountManager, accounts: combineLatest(enableSpotlight, self.activeAccountContexts
+                |> map { _, accounts, _ in
+                    return accounts.map { _, account, _ in
+                        return account.account
+                    }
+                }) |> map { enableSpotlight, accounts in
+                    if enableSpotlight {
+                        return accounts
+                    } else {
+                        return []
+                    }
+                })
+            } else {
+                self.spotlightDataContext = nil
+                let _ = try? FileManager.default.removeItem(atPath: applicationBindings.containerPath + "/spotlight-contacts")
+            }
         }
         
         if applicationBindings.isMainApp {

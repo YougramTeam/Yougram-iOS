@@ -21,6 +21,8 @@
 @property (nonatomic, readonly) bool isSiriEnabled;
 
 + (NSString * _Nullable)keychainAccessGroupForBaseAppBundleId:(NSString * _Nonnull)baseAppBundleId NS_SWIFT_NAME(keychainAccessGroup(baseAppBundleId:));
++ (NSString * _Nullable)resolvedAppGroupNameForBaseAppBundleId:(NSString * _Nonnull)baseAppBundleId NS_SWIFT_NAME(resolvedAppGroupName(baseAppBundleId:));
++ (NSURL * _Nonnull)appContainerURLForBaseAppBundleId:(NSString * _Nonnull)baseAppBundleId NS_SWIFT_NAME(appContainerURL(baseAppBundleId:));
 
 + (DeviceSpecificEncryptionParameters * _Nonnull)deviceSpecificEncryptionParameters:(NSString * _Nonnull)rootPath baseAppBundleId:(NSString * _Nonnull)baseAppBundleId;
 - (NSData * _Nullable)bundleDataWithAppToken:(NSData * _Nullable)appToken tokenType:(NSString * _Nullable)tokenType tokenEnvironment:(NSString * _Nullable)tokenEnvironment signatureDict:(NSDictionary * _Nullable)signatureDict;

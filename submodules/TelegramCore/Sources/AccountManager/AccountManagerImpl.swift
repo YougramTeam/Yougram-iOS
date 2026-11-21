@@ -94,11 +94,24 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
     private var sharedDataViews = Bag<(MutableAccountSharedDataView<Types>, ValuePipe<AccountSharedDataView<Types>>)>()
     private var noticeEntryViews = Bag<(MutableNoticeEntryView<Types>, ValuePipe<NoticeEntryView<Types>>)>()
     private var accessChallengeDataViews = Bag<(MutableAccessChallengeDataView, ValuePipe<AccessChallengeDataView>)>()
+    private let canBeginTransactionsValue = Atomic<Bool>(value: true)
+    private var queuedTransactions = Atomic<[() -> Void]>(value: [])
+
+    // Yougram: seal/open atomic-state JSON when local encryption is active.
+    private static func readAtomicStateData(fromPath path: String, explicitKeys: YougramVaultKeyMaterial? = PostboxLocalEncryption.current) throws -> Data {
+        let rawData = try Data(contentsOf: URL(fileURLWithPath: path))
+        if let keys = explicitKeys {
+            return try YougramEncryptedBlob.open(rawData, key: keys.atomicStateKey, aad: "ygas1")
+        } else if YougramEncryptedBlob.isEncrypted(rawData) {
+            throw YougramLocalEncryptionError.invalidKey
+        }
+        return rawData
+    }
     
     static func getCurrentRecords(basePath: String) -> (records: [AccountRecord<Types.Attribute>], currentId: AccountRecordId?) {
         let atomicStatePath = "\(basePath)/atomic-state"
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: atomicStatePath))
+            let data = try Self.readAtomicStateData(fromPath: atomicStatePath)
             let atomicState = try JSONDecoder().decode(AccountManagerAtomicState<Types>.self, from: data)
             return (atomicState.records.sorted(by: { $0.key.int64 < $1.key.int64 }).map({ $1 }), atomicState.currentRecordId)
         } catch let e {
@@ -119,7 +132,11 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         self.canCleanPasscodeMetadata = !isReadOnly && !isTemporary
         self.resolveAccessChallenge = accessChallenge.resolve
         let _ = try? FileManager.default.createDirectory(atPath: basePath, withIntermediateDirectories: true, attributes: nil)
-        guard let guardValueBox = SqliteValueBox(basePath: basePath + "/guard_db", queue: queue, isTemporary: isTemporary, isReadOnly: false, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError, encryptionParameters: nil, upgradeProgress: { _ in }) else {
+        // Yougram: encrypt AccountManager guard_db and db with vault SQLCipher keys when local encryption is active.
+        let activeEncryption = PostboxLocalEncryption.current
+        let guardEncryptionParams = activeEncryption?.accountManagerGuardDatabaseParameters
+        let mainEncryptionParams = activeEncryption?.accountManagerDatabaseParameters
+        guard let guardValueBox = SqliteValueBox(basePath: basePath + "/guard_db", queue: queue, isTemporary: isTemporary, isReadOnly: false, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError, encryptionParameters: guardEncryptionParams, upgradeProgress: { _ in }) else {
             postboxLog("Could not open guard value box at \(basePath + "/guard_db")")
             postboxLogSync()
             preconditionFailure()
@@ -129,7 +146,7 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         
         var valueBox: SqliteValueBox?
         for i in 0 ..< 3 {
-            if let valueBoxValue = SqliteValueBox(basePath: basePath + "/db", queue: queue, isTemporary: isTemporary, isReadOnly: isReadOnly, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError, encryptionParameters: nil, upgradeProgress: { _ in }) {
+            if let valueBoxValue = SqliteValueBox(basePath: basePath + "/db", queue: queue, isTemporary: isTemporary, isReadOnly: isReadOnly, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError, encryptionParameters: mainEncryptionParams, upgradeProgress: { _ in }) {
                 valueBox = valueBoxValue
                 break
             } else {
@@ -161,7 +178,7 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         }
         
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: self.atomicStatePath))
+            let data = try Self.readAtomicStateData(fromPath: self.atomicStatePath, explicitKeys: activeEncryption)
             do {
                 let atomicState = try JSONDecoder().decode(AccountManagerAtomicState<Types>.self, from: data)
                 self.currentAtomicState = atomicState
@@ -169,7 +186,7 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
                 postboxLog("decode atomic state error: \(e)")
                 postboxLogSync()
                 
-                if removeDatabaseOnError {
+                if removeDatabaseOnError && !PostboxLocalEncryption.isActive {
                     let _ = try? FileManager.default.removeItem(atPath: self.atomicStatePath)
                 }
                 preconditionFailure()
@@ -178,7 +195,7 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
             postboxLog("load atomic state error: \(e)")
             postboxLogSync()
             
-            if removeDatabaseOnError {
+            if removeDatabaseOnError && (!PostboxLocalEncryption.isActive || !FileManager.default.fileExists(atPath: self.atomicStatePath)) {
                 var legacyRecordDict: [AccountRecordId: AccountRecord<Types.Attribute>] = [:]
                 for record in self.legacyRecordTable.getRecords() {
                     legacyRecordDict[record.id] = record
@@ -335,13 +352,37 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         return result
     }
     
+    fileprivate func setCanBeginTransactions(_ value: Bool, afterTransactionIfRunning: @escaping () -> Void) {
+        self.queue.async {
+            let previous = self.canBeginTransactionsValue.swap(value)
+            if previous != value && value {
+                let fs = self.queuedTransactions.swap([])
+                for f in fs {
+                    f()
+                }
+            }
+            afterTransactionIfRunning()
+        }
+    }
+
     fileprivate func transaction<T>(ignoreDisabled: Bool, _ f: @escaping (AccountManagerModifier<Types>) -> T) -> Signal<T, NoError> {
         return Signal { subscriber in
             self.queue.justDispatch {
-                let result = self.transactionSync(ignoreDisabled: ignoreDisabled, f)
-                
-                subscriber.putNext(result)
-                subscriber.putCompletion()
+                let run = {
+                    let result = self.transactionSync(ignoreDisabled: ignoreDisabled, f)
+                    
+                    subscriber.putNext(result)
+                    subscriber.putCompletion()
+                }
+                if ignoreDisabled || self.canBeginTransactionsValue.with({ $0 }) {
+                    run()
+                } else {
+                    let _ = self.queuedTransactions.modify { fs in
+                        var fs = fs
+                        fs.append(run)
+                        return fs
+                    }
+                }
             }
             return EmptyDisposable
         }
@@ -416,9 +457,19 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         try? Data([1]).write(to: URL(fileURLWithPath: marker), options: .atomic)
     }
 
-    private func syncAtomicStateToFile() {
+    private func syncAtomicStateToFile(explicitKeys: YougramVaultKeyMaterial? = PostboxLocalEncryption.current) {
         if let data = try? JSONEncoder().encode(self.currentAtomicState) {
-            if let _ = try? data.write(to: URL(fileURLWithPath: self.atomicStatePath), options: [.atomic]) {
+            let outputData: Data
+            if let keys = explicitKeys {
+                guard let sealed = try? YougramEncryptedBlob.seal(data, key: keys.atomicStateKey, aad: "ygas1") else {
+                    postboxLogSync()
+                    preconditionFailure()
+                }
+                outputData = sealed
+            } else {
+                outputData = data
+            }
+            if let _ = try? outputData.write(to: URL(fileURLWithPath: self.atomicStatePath), options: [.atomic]) {
             } else {
                 postboxLogSync()
                 preconditionFailure()
@@ -429,21 +480,116 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         }
     }
     
-    private func getLoginTokens() -> [Data] {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: self.loginTokensPath)) else {
+    private func getLoginTokens(explicitKeys: YougramVaultKeyMaterial? = PostboxLocalEncryption.current) -> [Data] {
+        guard let rawData = try? Data(contentsOf: URL(fileURLWithPath: self.loginTokensPath)) else {
             return []
         }
-        guard let list = try? JSONDecoder().decode([Data].self, from: data) else {
+        let plainData: Data
+        if let keys = explicitKeys {
+            guard let opened = try? YougramEncryptedBlob.open(rawData, key: keys.loginTokensKey, aad: "yglt1") else {
+                return []
+            }
+            plainData = opened
+        } else if YougramEncryptedBlob.isEncrypted(rawData) {
+            return []
+        } else {
+            plainData = rawData
+        }
+        guard let list = try? JSONDecoder().decode([Data].self, from: plainData) else {
             return []
         }
         return list
     }
     
-    private func setLoginTokens(list: [Data]) {
+    private func setLoginTokens(list: [Data], explicitKeys: YougramVaultKeyMaterial? = PostboxLocalEncryption.current) {
         if let data = try? JSONEncoder().encode(list) {
-            if let _ = try? data.write(to: URL(fileURLWithPath: self.loginTokensPath), options: [.atomic]) {
+            let outputData: Data
+            if let keys = explicitKeys {
+                guard let sealed = try? YougramEncryptedBlob.seal(data, key: keys.loginTokensKey, aad: "yglt1") else {
+                    return
+                }
+                outputData = sealed
+            } else {
+                outputData = data
+            }
+            if let _ = try? outputData.write(to: URL(fileURLWithPath: self.loginTokensPath), options: [.atomic]) {
             }
         }
+    }
+
+    fileprivate func rekeyEncryption(encrypt: Bool, keys: YougramVaultKeyMaterial) throws {
+        assert(self.queue.isCurrent())
+        let guardParams = encrypt ? keys.accountManagerGuardDatabaseParameters : nil
+        let mainParams = encrypt ? keys.accountManagerDatabaseParameters : nil
+        try (self.guardValueBox as? SqliteValueBox)?.rekey(to: guardParams)
+        try (self.valueBox as? SqliteValueBox)?.rekey(to: mainParams)
+
+        let targetKeys: YougramVaultKeyMaterial? = encrypt ? keys : nil
+        self.syncAtomicStateToFile(explicitKeys: targetKeys)
+        if FileManager.default.fileExists(atPath: self.loginTokensPath) {
+            let readKeys: YougramVaultKeyMaterial? = encrypt ? nil : keys
+            let tokens = self.getLoginTokens(explicitKeys: readKeys)
+            self.setLoginTokens(list: tokens, explicitKeys: targetKeys)
+        }
+    }
+
+    private static func migrateSealedFileStandalone(path: String, encrypt: Bool, key: Data, aad: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else {
+            return
+        }
+        let rawData = try Data(contentsOf: URL(fileURLWithPath: path))
+        if encrypt {
+            if YougramEncryptedBlob.isEncrypted(rawData) {
+                _ = try YougramEncryptedBlob.open(rawData, key: key, aad: aad)
+            } else {
+                let sealed = try YougramEncryptedBlob.seal(rawData, key: key, aad: aad)
+                try sealed.write(to: URL(fileURLWithPath: path), options: [.atomic])
+            }
+        } else {
+            if YougramEncryptedBlob.isEncrypted(rawData) {
+                let plain = try YougramEncryptedBlob.open(rawData, key: key, aad: aad)
+                try plain.write(to: URL(fileURLWithPath: path), options: [.atomic])
+            }
+        }
+    }
+
+    static func rekeyStandalone(basePath: String, encrypt: Bool, keys: YougramVaultKeyMaterial, progress: ((Float) -> Void)? = nil) throws {
+        try SqliteValueBox.rekeyStandaloneDatabase(
+            basePath: basePath + "/guard_db",
+            from: encrypt ? nil : keys.accountManagerGuardDatabaseParameters,
+            to: encrypt ? keys.accountManagerGuardDatabaseParameters : nil
+        )
+        try SqliteValueBox.rekeyStandaloneDatabase(
+            basePath: basePath + "/db",
+            from: encrypt ? nil : keys.accountManagerDatabaseParameters,
+            to: encrypt ? keys.accountManagerDatabaseParameters : nil
+        )
+        try Self.migrateSealedFileStandalone(
+            path: basePath + "/atomic-state",
+            encrypt: encrypt,
+            key: keys.atomicStateKey,
+            aad: "ygas1"
+        )
+        try Self.migrateSealedFileStandalone(
+            path: basePath + "/login-tokens",
+            encrypt: encrypt,
+            key: keys.loginTokensKey,
+            aad: "yglt1"
+        )
+        try MediaBox.migrateMediaDirectoryStandalone(basePath: basePath + "/media", encrypt: encrypt, keys: keys) { p in
+            progress?(p * 0.85)
+        }
+        try SqliteValueBox.rekeyStandaloneDatabase(
+            basePath: basePath + "/media/storage/db",
+            from: encrypt ? nil : keys.storageBoxDatabaseParameters,
+            to: encrypt ? keys.storageBoxDatabaseParameters : nil
+        )
+        try SqliteValueBox.rekeyStandaloneDatabase(
+            basePath: basePath + "/media/cache-storage/db",
+            from: encrypt ? nil : keys.storageBoxDatabaseParameters,
+            to: encrypt ? keys.storageBoxDatabaseParameters : nil
+        )
+        progress?(1.0)
     }
     
     private func beforeCommit() {
@@ -863,5 +1009,34 @@ public final class AccountManager<Types: AccountManagerTypes> {
             }
             return disposable
         }
+    }
+
+    // Yougram: pause/resume AccountManager transactions and rekey AccountManager databases, files, and mediaBox.
+    public func setCanBeginTransactions(_ value: Bool, afterTransactionIfRunning: @escaping () -> Void = {}) {
+        self.impl.with { impl in
+            impl.setCanBeginTransactions(value, afterTransactionIfRunning: afterTransactionIfRunning)
+        }
+    }
+
+    public func rekeyEncryption(encrypt: Bool, keys: YougramVaultKeyMaterial, progress: ((Float) -> Void)? = nil) throws {
+        var rekeyError: Error?
+        self.impl.syncWith { impl in
+            do {
+                try impl.rekeyEncryption(encrypt: encrypt, keys: keys)
+            } catch {
+                rekeyError = error
+            }
+        }
+        if let rekeyError {
+            throw rekeyError
+        }
+        progress?(0.2)
+        try self.mediaBox.migrateMediaFiles(encrypt: encrypt, keys: keys) { p in
+            progress?(0.2 + p * 0.8)
+        }
+    }
+
+    public static func rekeyStandalone(basePath: String, encrypt: Bool, keys: YougramVaultKeyMaterial, progress: ((Float) -> Void)? = nil) throws {
+        try AccountManagerImpl<Types>.rekeyStandalone(basePath: basePath, encrypt: encrypt, keys: keys, progress: progress)
     }
 }

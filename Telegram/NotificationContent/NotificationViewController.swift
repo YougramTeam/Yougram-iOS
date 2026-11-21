@@ -25,18 +25,31 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
             
             let languagesCategory = "ios"
             
-            let appGroupName = "group.\(baseAppBundleId)"
-            try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
-            let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-            
-            guard let appGroupUrl = maybeAppGroupUrl else {
-                return
-            }
+            let appGroupName = BuildConfig.resolvedAppGroupName(baseAppBundleId: baseAppBundleId) ?? "group.\(baseAppBundleId)"
+            try? PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
+            let appGroupUrl = BuildConfig.appContainerURL(baseAppBundleId: baseAppBundleId)
             
             let rootPath = appGroupUrl.path + "/telegram-data"
             
-            let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
-            let encryptionParameters: (Data, Data) = (deviceSpecificEncryptionParameters.key, deviceSpecificEncryptionParameters.salt)
+            let encryptionParameters: (Data, Data)
+            switch resolveExtensionEncryptionKeyPair(rootPath: rootPath) {
+            case .disabled:
+                let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+                encryptionParameters = (deviceSpecificEncryptionParameters.key, deviceSpecificEncryptionParameters.salt)
+            case let .unlocked(key, salt):
+                encryptionParameters = (key, salt)
+            case .locked:
+                let label = UILabel()
+                label.text = "Locked"
+                label.textAlignment = .center
+                label.translatesAutoresizingMaskIntoConstraints = false
+                self.view.addSubview(label)
+                NSLayoutConstraint.activate([
+                    label.centerXAnchor.constraint(equalTo: self.view.centerXAnchor),
+                    label.centerYAnchor.constraint(equalTo: self.view.centerYAnchor)
+                ])
+                return
+            }
             
             let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
             
@@ -56,5 +69,14 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
         super.viewWillTransition(to: size, with: coordinator)
         
         self.impl?.viewWillTransition(to: size)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        purgeExtensionEphemeralCache()
+    }
+
+    deinit {
+        purgeExtensionEphemeralCache()
     }
 }

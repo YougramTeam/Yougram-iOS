@@ -90,3 +90,40 @@ Toggles bind to a `WritableKeyPath<YougramSettings, Bool>`; `requiresRestart: tr
   signed in; `SharedAccountContextImpl` brings it up through `accountWithId(... backupData:)`. A session revoked on the
   server comes back logged out. Read `submodules/MTProtoRustEngine/CLAUDE.md` before touching anything that decides
   logout.
+
+
+## Local Encryption (`YougramVaultStore.swift`, `YougramLocalEncryption.swift`)
+
+- When off, zero `.yougram-vault.json` is written and upstream behaviour (`.tempkey`, SQLite, media, logging, extensions)
+  is untouched.
+- Enabling generates a random 256-bit Master Vault Key (`VMK`) wrapped in `.yougram-vault.json` under either a Dedicated
+  secret (PBKDF2-HMAC-SHA256 310k + hardware Secure Enclave / fallback pepper) or the user's App Passcode Lock session
+  (`PasscodeCredentialStore.setVaultProtectionEnabled(true)`, clearing `unprotectedKey` and blocking "Turn Passcode Off"
+  until Local Encryption is disabled or switched).
+- Domain-separated HKDF-SHA256 subkeys of `VMK` encrypt every SQLCipher database (`postbox`, `accounts-metadata`,
+  `guard_db`, `StorageBox`), seal `atomic-state` and `login-tokens` (`YGE1`), encrypt complete media (`YGCF` v1 chunked
+  AES-256-GCM with sealed trailer) and sparse partial downloads (`YGPR` AES-256-CTR + `YGE1` `.meta`) under `enc_*`
+  obfuscated filenames, and keep decrypted temp files strictly in an ephemeral session folder under `NSTemporaryDirectory()`
+  purged synchronously on launch, lock, background, termination, and extension exit.
+- Background Notifications & Extensions defaults to **Strict** (no unwrapped `VMK` in shared Keychain; extensions stay locked
+  and pushes show `"You have a new message"`). Switching it on writes `VMK` to the shared app-group Keychain with
+  `WhenUnlockedThisDeviceOnly` after explicit disclosure.
+
+
+## Local History DB (`YougramMessageHistory.swift`, `YougramLocalHistoryController.swift`)
+
+- Anti-Recall (`saveDeletedMessages`) and Edit History (`saveEditHistory`) snapshot pre-delete/pre-edit message payloads in
+  `StateReplay+Messages.swift` into Postbox `Namespaces.CachedItemCollection.yougramMessageHistory` (keyed by peer id,
+  capped at 500 deleted / 200 edited records per peer, 30 versions per message) plus `PreferencesKeys.yougramMessageHistoryIndex`.
+- Service messages (`TelegramMediaAction` / `TelegramMediaExpiredContent`) and self-destructing/autoremove messages
+  (`AutoremoveTimeoutMessageAttribute` / `AutoclearTimeoutMessageAttribute`) are excluded.
+- Because both tables live inside `Postbox`, enabling Local Encryption automatically encrypts saved history at rest under SQLCipher.
+
+
+## Blocked Users Local Filter (`YougramBlockedPeers.swift`)
+
+- `PreferencesKeys.yougramBlockedPeerIds` (`YougramBlockedPeersStore`) caches the account's messaging-blocked `PeerId`s,
+  kept in sync by `StateReplay+Peers.swift`, `BlockedPeers.swift`, `BlockedPeersContext.swift`, and paginated
+  `contacts.getBlocked` refreshes (`TelegramEngine.Privacy.yougramBlockedPeerIds()` / `yougramRefreshBlockedPeers()`).
+- `ChatHistoryEntriesForView.swift` hides messages only where `authorId != context.account.peerId && authorId != location.peerId`
+  so direct 1-on-1 chats remain intact while blocked users' messages in shared groups, channels, and threads are filtered out.

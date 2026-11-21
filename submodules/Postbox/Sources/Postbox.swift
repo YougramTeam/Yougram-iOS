@@ -4885,6 +4885,21 @@ public class Postbox {
         }
     }
 
+    // Yougram: re-key Postbox SQLite database during local encryption migration.
+    public func rekey(to parameters: ValueBoxEncryptionParameters) throws {
+        var rekeyError: Error?
+        self.impl.syncWith { impl in
+            do {
+                try impl.valueBox.rekey(to: parameters)
+            } catch {
+                rekeyError = error
+            }
+        }
+        if let rekeyError {
+            throw rekeyError
+        }
+    }
+
     public func transactionSignal<T, E>(userInteractive: Bool = false, _ f: @escaping(Subscriber<T, E>, Transaction) -> Disposable) -> Signal<T, E> {
         return Signal<T, E> { subscriber in
             let disposable = MetaDisposable()

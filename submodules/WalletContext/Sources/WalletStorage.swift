@@ -568,10 +568,16 @@ actor WalletEngineStorage {
             kSecAttrAccount as String: account,
             kSecAttrSynchronizable as String: false
         ]
-        if let group = try WalletVault.keychainAccessGroup() {
+        if let group = try? WalletVault.keychainAccessGroup(), let group {
             query[kSecAttrAccessGroup as String] = group
         }
         return query
+    }
+
+    private func withoutAccessGroup(_ query: [String: Any]) -> [String: Any] {
+        var copy = query
+        copy.removeValue(forKey: kSecAttrAccessGroup as String)
+        return copy
     }
 
     private func read(service: String, account: String) throws -> Data? {
@@ -579,7 +585,11 @@ actor WalletEngineStorage {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        var status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecMissingEntitlement, query[kSecAttrAccessGroup as String] != nil {
+            item = nil
+            status = SecItemCopyMatching(self.withoutAccessGroup(query) as CFDictionary, &item)
+        }
         if status == errSecItemNotFound {
             return nil
         }
@@ -591,10 +601,16 @@ actor WalletEngineStorage {
 
     private func write(_ data: Data, service: String, account: String) throws {
         let query = try self.baseQuery(service: service, account: account)
-        let updateStatus = SecItemUpdate(
+        var updateStatus = SecItemUpdate(
             query as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
         )
+        if updateStatus == errSecMissingEntitlement, query[kSecAttrAccessGroup as String] != nil {
+            updateStatus = SecItemUpdate(
+                self.withoutAccessGroup(query) as CFDictionary,
+                [kSecValueData as String: data] as CFDictionary
+            )
+        }
         if updateStatus == errSecSuccess {
             return
         }
@@ -604,14 +620,21 @@ actor WalletEngineStorage {
         var addQuery = query
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         addQuery[kSecValueData as String] = data
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        var addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecMissingEntitlement, addQuery[kSecAttrAccessGroup as String] != nil {
+            addStatus = SecItemAdd(self.withoutAccessGroup(addQuery) as CFDictionary, nil)
+        }
         guard addStatus == errSecSuccess else {
             throw WalletEngineStorageError.keychainStatus(addStatus)
         }
     }
 
     private func remove(service: String, account: String) throws {
-        let status = SecItemDelete(try self.baseQuery(service: service, account: account) as CFDictionary)
+        let query = try self.baseQuery(service: service, account: account)
+        var status = SecItemDelete(query as CFDictionary)
+        if status == errSecMissingEntitlement, query[kSecAttrAccessGroup as String] != nil {
+            status = SecItemDelete(self.withoutAccessGroup(query) as CFDictionary)
+        }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw WalletEngineStorageError.keychainStatus(status)
         }

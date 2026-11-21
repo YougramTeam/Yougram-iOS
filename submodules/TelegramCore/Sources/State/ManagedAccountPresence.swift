@@ -21,6 +21,7 @@ private final class AccountPresenceManagerImpl {
     private var sentOnline: Bool = false
     /// Yougram: Ghost Mode's "Go Offline Automatically" has appeared online once since the app came to the front.
     private var didGoOfflineAutomatically: Bool = false
+    private var ghostModeObserver: NSObjectProtocol?
 
     init(queue: Queue, shouldKeepOnlinePresence: Signal<Bool, NoError>, network: Network) {
         self.queue = queue
@@ -37,6 +38,19 @@ private final class AccountPresenceManagerImpl {
                 self.updatePresence(value)
             }
         })
+
+        // Yougram: react immediately when Ghost Mode settings change while app is open.
+        self.ghostModeObserver = NotificationCenter.default.addObserver(forName: YougramCoreOptions.ghostModeDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.queue.async { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.updatePresence(self.wasOnline)
+            }
+        }
     }
     
     deinit {
@@ -44,12 +58,16 @@ private final class AccountPresenceManagerImpl {
         self.shouldKeepOnlinePresenceDisposable?.dispose()
         self.currentRequestDisposable.dispose()
         self.onlineTimer?.invalidate()
+        if let ghostModeObserver = self.ghostModeObserver {
+            NotificationCenter.default.removeObserver(ghostModeObserver)
+        }
     }
     
     private func updatePresence(_ isOnline: Bool) {
         let ghostMode = YougramCoreOptions.ghostMode
         let request: Signal<Api.Bool, MTRpcError>
         if isOnline {
+            self.onlineTimer?.invalidate()
             let timer = SignalKitTimer(timeout: 30.0, repeat: false, completion: { [weak self] in
                 guard let strongSelf = self else {
                     return
@@ -58,8 +76,9 @@ private final class AccountPresenceManagerImpl {
             }, queue: self.queue)
             self.onlineTimer = timer
             timer.start()
-            // Yougram: Ghost Mode. The timer keeps running either way, so a changed option takes effect within 30 s.
+            // Yougram: Ghost Mode. The timer keeps running either way, so a changed option takes effect immediately or within 30 s.
             if ghostMode.hideOnline {
+                self.didGoOfflineAutomatically = false
                 // No online status. One already sent is ended once; with none, nothing is sent, since an offline
                 // status would also show the user as last seen just now.
                 if !self.sentOnline {
@@ -73,9 +92,14 @@ private final class AccountPresenceManagerImpl {
                     return
                 }
                 self.didGoOfflineAutomatically = true
-                self.sentOnline = false
-                request = self.network.request(Api.functions.account.updateStatus(offline: .boolFalse))
-                |> then(self.network.request(Api.functions.account.updateStatus(offline: .boolTrue)))
+                if self.sentOnline {
+                    self.sentOnline = false
+                    request = self.network.request(Api.functions.account.updateStatus(offline: .boolTrue))
+                } else {
+                    self.sentOnline = false
+                    request = self.network.request(Api.functions.account.updateStatus(offline: .boolFalse))
+                    |> then(self.network.request(Api.functions.account.updateStatus(offline: .boolTrue)))
+                }
             } else {
                 self.didGoOfflineAutomatically = false
                 self.sentOnline = true

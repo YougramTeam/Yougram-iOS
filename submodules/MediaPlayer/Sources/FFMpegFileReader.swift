@@ -30,7 +30,18 @@ private func FFMpegFileReader_readPacketCallback(userData: UnsafeMutableRawPoint
         var bufferOffset = 0
         let doRead: (Range<Int64>) -> Void = { range in
             //TODO:improve thread safe read if incomplete
-            if let (file, readSize) = resource.mediaBox.internal_resourceData(id: resource.resource.id, size: resource.resourceSize, in: range) {
+            if PostboxLocalEncryption.isActive {
+                if let count = resource.mediaBox.internal_readResourceData(
+                    id: resource.resource.id,
+                    size: resource.resourceSize,
+                    in: range,
+                    into: buffer.advanced(by: bufferOffset),
+                    maxCount: Int(readCount) - bufferOffset
+                ) {
+                    bufferOffset += count
+                    resource.readingPosition += Int64(count)
+                }
+            } else if let (file, readSize) = resource.mediaBox.internal_resourceData(id: resource.resource.id, size: resource.resourceSize, in: range) {
                 let effectiveReadSize = max(0, min(Int(readCount) - bufferOffset, readSize))
                 let count = file.read(buffer.advanced(by: bufferOffset), effectiveReadSize)
                 bufferOffset += count

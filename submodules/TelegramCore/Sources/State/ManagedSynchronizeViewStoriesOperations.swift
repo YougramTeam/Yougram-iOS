@@ -119,6 +119,10 @@ func managedSynchronizeViewStoriesOperations(postbox: Postbox, network: Network,
 }
 
 private func pushStoriesAreSeen(postbox: Postbox, network: Network, stateManager: AccountStateManager, peer: Peer, operation: SynchronizeViewStoriesOperation) -> Signal<Void, NoError> {
+    // Yougram: Ghost Mode drops queued story read operations while hideStoryViews is active.
+    if YougramCoreOptions.ghostMode.hideStoryViews {
+        return .complete()
+    }
     guard let inputPeer = apiInputPeer(peer) else {
         return .complete()
     }

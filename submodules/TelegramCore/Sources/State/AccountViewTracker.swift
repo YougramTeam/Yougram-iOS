@@ -981,6 +981,10 @@ public final class AccountViewTracker {
                     
                     if let account = self.account {
                         let signal = (account.postbox.transaction { transaction -> Signal<Void, NoError> in
+                            // Yougram: Ghost Mode suppresses read receipts for live location message content.
+                            if YougramCoreOptions.ghostMode.hideReadReceipts {
+                                return .complete()
+                            }
                             if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
                                 let request: Signal<Bool, MTRpcError>
                                 switch inputPeer {

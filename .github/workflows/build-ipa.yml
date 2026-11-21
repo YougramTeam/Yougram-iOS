@@ -14,13 +14,13 @@ run-name: Build IPA (${{ inputs.configuration }}, ${{ inputs.signing }}, ${{ inp
 #   10 GB). Raise the repo's Actions cache limit in Settings > Actions before raising it.
 # - Bundle id: build-system/yougram-configuration.json.
 # - Signing:
+#   * unsigned (default): built with build-system/yougram-codesigning, then signatures and
+#     provisioning profiles are stripped cleanly into an unsigned .ipa artifact (no TestFlight);
 #   * testflight: build-system/yougram-signing/asc.py creates a fresh Apple Distribution
 #     certificate and App Store profiles with the App Store Connect API key (secrets
 #     ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY), the build is uploaded to TestFlight, and
 #     the certificate and profiles are revoked and deleted at the end of the same run, whatever
 #     happened. Needs the one-time "App Store setup" workflow plus the App Group steps it prints.
-#   * placeholder: signed with build-system/yougram-codesigning (no Apple account); re-sign the
-#     .ipa to install it.
 
 on:
   workflow_dispatch:
@@ -45,12 +45,12 @@ on:
         type: number
         default: 300
       signing:
-        description: testflight signs with your App Store Connect API key and uploads to TestFlight; placeholder needs no Apple account (re-sign the .ipa to install).
+        description: unsigned builds a clean unsigned .ipa artifact with no TestFlight upload; testflight signs with your App Store Connect API key and uploads to TestFlight.
         type: choice
         options:
+          - unsigned
           - testflight
-          - placeholder
-        default: testflight
+        default: unsigned
 
 permissions:
   contents: read
@@ -238,7 +238,37 @@ jobs:
         if: steps.build.outcome == 'success'
         run: |
           mkdir -p "$RUNNER_TEMP/out"
-          cp bazel-bin/Telegram/Telegram.ipa "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER.ipa"
+          if [ "$SIGNING" = "testflight" ]; then
+            cp bazel-bin/Telegram/Telegram.ipa "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER.ipa"
+          else
+            STAGE="$RUNNER_TEMP/unsigned-stage"
+            rm -rf "$STAGE"
+            mkdir -p "$STAGE"
+            ditto -x -k bazel-bin/Telegram/Telegram.ipa "$STAGE"
+            find "$STAGE/Payload" \( -name "_CodeSignature" -o -name "SC_Info" \) -type d -prune -exec rm -rf {} +
+            find "$STAGE/Payload" \( -name "embedded.mobileprovision" -o -name "CodeResources" \) -type f -delete
+            python3 - "$STAGE/Payload" <<'PY'
+          import os, subprocess, sys
+          MAGICS = {
+              b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+              b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+              b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+          }
+          for root, dirs, files in os.walk(sys.argv[1]):
+              for name in files:
+                  path = os.path.join(root, name)
+                  if os.path.islink(path):
+                      continue
+                  try:
+                      with open(path, "rb") as f:
+                          magic = f.read(4)
+                  except OSError:
+                      continue
+                  if magic in MAGICS:
+                      subprocess.run(["codesign", "--remove-signature", path], check=True)
+          PY
+            (cd "$STAGE" && zip -qry "$RUNNER_TEMP/out/Yougram-$APP_VERSION-$BUILD_NUMBER-unsigned.ipa" Payload)
+          fi
           ls -lh "$RUNNER_TEMP/out"
 
       - name: Upload to TestFlight
@@ -259,12 +289,12 @@ jobs:
           echo "Uploaded build $BUILD_NUMBER. It appears in TestFlight once Apple has processed it (usually 5-30 minutes)." >> "$GITHUB_STEP_SUMMARY"
 
       # TestFlight already has it, and the private repo's artifact storage is 500 MB: keep the
-      # .ipa as a download only for placeholder builds.
+      # .ipa as a download only for non-TestFlight unsigned builds.
       - name: Upload the IPA
         if: steps.build.outcome == 'success' && inputs.signing != 'testflight'
         uses: actions/upload-artifact@v7
         with:
-          name: Yougram-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}-${{ inputs.configuration }}
+          name: Yougram-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}-${{ inputs.configuration }}-unsigned
           path: ${{ runner.temp }}/out/*.ipa
           retention-days: 14
           compression-level: 0 # an .ipa is already a zip

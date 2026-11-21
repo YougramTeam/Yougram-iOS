@@ -24,6 +24,7 @@ import AdUI
 import TelegramNotices
 import ReactionListContextMenuContent
 import TelegramUIPreferences
+import YougramSettingsUI
 import TranslateUI
 import DebugSettingsUI
 import ChatPresentationInterfaceState
@@ -461,7 +462,8 @@ private func ephemeralReplacementContextMenuItems(chatPresentationInterfaceState
 
         if let replacementMessage {
             let isForwardingDisabled = (replacementMessage.attributes.first(where: { $0 is EphemeralMessageAttribute }) as? EphemeralMessageAttribute)?.isForwardingDisabled ?? false
-            if !isForwardingDisabled && !isCopyProtected && !replacementMessage.containsSecretMedia && !replacementMessage.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent }) {
+            let serverProtected = replacementMessage.isServerCopyProtected() || (chatPresentationInterfaceState.renderedPeer?.peer?.isServerCopyProtectionEnabled ?? false)
+            if !isForwardingDisabled && !isCopyProtected && !serverProtected && !replacementMessage.containsSecretMedia && !replacementMessage.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent }) {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuForward, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
                 }, action: { _, f in
@@ -892,8 +894,9 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
     }
     
     let isScheduled = chatPresentationInterfaceState.subject == .scheduledMessages
+    let editHistorySignal: Signal<YougramEditedMessageRecord?, NoError> = YougramCoreOptions.saveEditHistory ? context.engine.messages.yougramEditHistory(messageId: message.id) : .single(nil)
     
-    let dataSignal: Signal<(MessageContextMenuData, [EngineMessage.Id: ChatUpdatingMessageMedia], InfoSummaryData, AppConfiguration, Bool, Int32, AvailableReactions?, TranslationSettings, LoggingSettings, NotificationSoundList?, EnginePeer?), NoError> = combineLatest(
+    let dataSignal: Signal<(MessageContextMenuData, [EngineMessage.Id: ChatUpdatingMessageMedia], InfoSummaryData, AppConfiguration, Bool, Int32, AvailableReactions?, TranslationSettings, LoggingSettings, NotificationSoundList?, (EnginePeer?, YougramEditedMessageRecord?)), NoError> = combineLatest(
         loadLimits,
         loadStickerSaveStatusSignal,
         loadResourceStatusSignal,
@@ -906,9 +909,9 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         context.engine.stickers.availableReactions(),
         context.sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.translationSettings, SharedDataKeys.loggingSettings]) |> take(1),
         context.engine.peers.notificationSoundList() |> take(1),
-        context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
+        combineLatest(context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId)), editHistorySignal)
     )
-    |> map { limitsAndAppConfig, stickerSaveStatus, resourceStatus, messageActions, updatingMessageMedia, infoSummaryData, isMessageRead, messageViewsPrivacyTips, availableReactions, sharedData, notificationSoundList, accountPeer -> (MessageContextMenuData, [EngineMessage.Id: ChatUpdatingMessageMedia], InfoSummaryData, AppConfiguration, Bool, Int32, AvailableReactions?, TranslationSettings, LoggingSettings, NotificationSoundList?, EnginePeer?) in
+    |> map { limitsAndAppConfig, stickerSaveStatus, resourceStatus, messageActions, updatingMessageMedia, infoSummaryData, isMessageRead, messageViewsPrivacyTips, availableReactions, sharedData, notificationSoundList, accountPeerAndHistory -> (MessageContextMenuData, [EngineMessage.Id: ChatUpdatingMessageMedia], InfoSummaryData, AppConfiguration, Bool, Int32, AvailableReactions?, TranslationSettings, LoggingSettings, NotificationSoundList?, (EnginePeer?, YougramEditedMessageRecord?)) in
         let (limitsConfiguration, appConfig) = limitsAndAppConfig
         var canEdit = false
         if !isAction {
@@ -956,12 +959,13 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             messageActions: messageActions
         )
         
-        return (data, updatingMessageMedia, infoSummaryData, appConfig, isMessageRead, messageViewsPrivacyTips, availableReactions, translationSettings, loggingSettings, notificationSoundList, accountPeer)
+        return (data, updatingMessageMedia, infoSummaryData, appConfig, isMessageRead, messageViewsPrivacyTips, availableReactions, translationSettings, loggingSettings, notificationSoundList, accountPeerAndHistory)
     }
     
     return dataSignal
     |> deliverOnMainQueue
-    |> map { [context] data, updatingMessageMedia, infoSummaryData, appConfig, isMessageRead, messageViewsPrivacyTips, availableReactions, translationSettings, loggingSettings, notificationSoundList, accountPeer -> ContextController.Items in
+    |> map { [context] data, updatingMessageMedia, infoSummaryData, appConfig, isMessageRead, messageViewsPrivacyTips, availableReactions, translationSettings, loggingSettings, notificationSoundList, accountPeerAndHistory -> ContextController.Items in
+        let (accountPeer, editHistoryRecord) = accountPeerAndHistory
         let isPremium = accountPeer?.isPremium ?? false
 
         var actions: [ContextMenuItem] = []
@@ -1955,7 +1959,8 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         }
 
         if data.messageActions.options.contains(.forward), !YougramContextMenuAction.forward.isHidden {
-            if !isCopyProtected {
+            let serverProtected = message.isServerCopyProtected() || (message.peers[message.id.peerId]?.isServerCopyProtectionEnabled ?? false)
+            if !isCopyProtected && !serverProtected {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuForward, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
                 }, action: { _, f in
@@ -1963,6 +1968,15 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     f(.dismissWithoutContent)
                 })))
             }
+        }
+
+        if let editHistoryRecord, !editHistoryRecord.versions.isEmpty {
+            actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Yougram_History_EditHistory, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Time"), color: theme.actionSheet.primaryTextColor)
+            }, action: { _, f in
+                f(.dismissWithoutContent)
+                controllerInteraction.navigationController()?.pushViewController(yougramEditHistoryController(context: context, messageId: message.id, currentText: message.text))
+            })))
         }
         
         if data.messageActions.options.contains(.report) {
@@ -2719,7 +2733,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                 if id.namespace == Namespaces.Message.EphemeralLocal {
                     let isForwardingDisabled = (message.attributes.first(where: { $0 is EphemeralMessageAttribute }) as? EphemeralMessageAttribute)?.isForwardingDisabled ?? false
                     let isAction = message.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent })
-                    if !isForwardingDisabled && !message.containsSecretMedia && !isAction && !isCopyProtected && !isShareProtected && !(message.flags.isSending || message.flags.contains(.Failed)) {
+                    if !isForwardingDisabled && !message.containsSecretMedia && !isAction && !isCopyProtected && !message.isServerCopyProtected() && !isShareProtected && !(message.flags.isSending || message.flags.contains(.Failed)) {
                         optionsMap[id]!.insert(.forward)
                     }
                     optionsMap[id]!.insert(.deleteLocally)
@@ -2801,7 +2815,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                             }
                         }
                         if !message.containsSecretMedia && !isAction && !isShareProtected {
-                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isCopyProtected() {
+                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isCopyProtected() && !message.isServerCopyProtected() && !channel.isServerCopyProtectionEnabled {
                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                     optionsMap[id]!.insert(.forward)
                                 }
@@ -2817,7 +2831,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                         }
                     } else if let group = peer as? TelegramGroup {
                         if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia {
-                            if !isAction && !message.isCopyProtected() && !isShareProtected {
+                            if !isAction && !message.isCopyProtected() && !message.isServerCopyProtected() && !group.isServerCopyProtectionEnabled && !isShareProtected {
                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                     optionsMap[id]!.insert(.forward)
                                 }
@@ -2836,7 +2850,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                             optionsMap[id]!.insert(.report)
                         }
                     } else if let user = peer as? TelegramUser {
-                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isCopyProtected() && !isShareProtected {
+                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isCopyProtected() && !message.isServerCopyProtected() && !isShareProtected {
                             if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                 optionsMap[id]!.insert(.forward)
                             }

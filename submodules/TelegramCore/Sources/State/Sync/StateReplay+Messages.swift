@@ -199,7 +199,8 @@ extension ReplayContext {
                 }
 
                 if !message.flags.contains(.Incoming), message.forwardInfo == nil {
-                    if [Namespaces.Peer.CloudGroup, Namespaces.Peer.CloudChannel].contains(message.id.peerId.namespace), let peer = transaction.getPeer(message.id.peerId), peer.isCopyProtectionEnabled {
+                    // Yougram: sticker history replay follows server copy-protection state rather than local unlock.
+                    if [Namespaces.Peer.CloudGroup, Namespaces.Peer.CloudChannel].contains(message.id.peerId.namespace), let peer = transaction.getPeer(message.id.peerId), peer.isServerCopyProtectionEnabled {
 
                     } else if message.id.peerId.namespace == Namespaces.Peer.CloudUser, let cachedUserData = transaction.getPeerCachedData(peerId: message.id.peerId) as? CachedUserData, cachedUserData.flags.contains(.copyProtectionEnabled) || cachedUserData.flags.contains(.myCopyProtectionEnabled) {
 
@@ -274,6 +275,11 @@ extension ReplayContext {
     }
     
     func applyDeleteMessagesWithGlobalIds(_ ids: [Int32]) {
+        // Yougram: snapshot messages before server recall/deletion removes them locally.
+        if YougramCoreOptions.saveDeletedMessages {
+            let messageIds = transaction.messageIdsForGlobalIds(ids)
+            yougramRecordDeletedMessages(transaction: transaction, ids: messageIds)
+        }
         var resourceIds: [MediaResourceId] = []
         transaction.deleteMessagesWithGlobalIds(ids, forEachMedia: { media in
             addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
@@ -285,6 +291,10 @@ extension ReplayContext {
     }
     
     func applyDeleteMessages(_ ids: [MessageId]) {
+        // Yougram: snapshot messages before server recall/deletion removes them locally.
+        if YougramCoreOptions.saveDeletedMessages {
+            yougramRecordDeletedMessages(transaction: transaction, ids: ids)
+        }
         _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: ids, manualAddMessageThreadStatsDifference: { id, add, remove in
             self.addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
         })
@@ -306,7 +316,9 @@ extension ReplayContext {
     
     func applyEditMessage(_ id: MessageId, _ message: StoreMessage) {
         var generatedEvent: (reactionAuthor: Peer, reaction: MessageReaction.Reaction, message: Message, timestamp: Int32)?
+        var editedPreviousMessage: Message?
         transaction.updateMessage(id, update: { previousMessage in
+            editedPreviousMessage = previousMessage
             let peers: [PeerId:Peer] = previousMessage.peers.reduce([:], { current, value in
                 var current = current
                 current[value.0] = value.1
@@ -319,6 +331,10 @@ extension ReplayContext {
 
             return .update(mergedServerMessageUpdate(previous: previousMessage, updated: message))
         })
+        // Yougram: record previous message text before edits overwrite it.
+        if let editedPreviousMessage, YougramCoreOptions.saveEditHistory {
+            yougramRecordEditedMessage(transaction: transaction, previousMessage: editedPreviousMessage, newText: message.text)
+        }
         // A fetch in flight may be bringing the message with its old content, over the edited one or, with none stored
         // here, instead of it; it stores this edit in its place (Postbox's record of recent edits,
         // `fetchedMessagesWithRecentEdits`; owner decision 2026-10-25).

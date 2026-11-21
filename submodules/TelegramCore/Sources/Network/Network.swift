@@ -150,7 +150,14 @@ private func usageCalculationInfo(basePath: String, category: MediaResourceStats
     } else {
         categoryValue = .generic
     }
-    return MTNetworkUsageCalculationInfo(filePath: basePath + "/network-stats", incomingWWANKey: UsageCalculationTag(connection: .cellular, direction: .incoming, category: categoryValue).key, outgoingWWANKey: UsageCalculationTag(connection: .cellular, direction: .outgoing, category: categoryValue).key, incomingOtherKey: UsageCalculationTag(connection: .wifi, direction: .incoming, category: categoryValue).key, outgoingOtherKey: UsageCalculationTag(connection: .wifi, direction: .outgoing, category: categoryValue).key)
+    // Yougram: keep network usage stats in ephemeral session directory when local encryption is active.
+    let filePath: String
+    if PostboxLocalEncryption.isActive {
+        filePath = PostboxLocalEncryption.ephemeralCache.ephemeralSubdirectory("network-stats") + "/network-stats"
+    } else {
+        filePath = basePath + "/network-stats"
+    }
+    return MTNetworkUsageCalculationInfo(filePath: filePath, incomingWWANKey: UsageCalculationTag(connection: .cellular, direction: .incoming, category: categoryValue).key, outgoingWWANKey: UsageCalculationTag(connection: .cellular, direction: .outgoing, category: categoryValue).key, incomingOtherKey: UsageCalculationTag(connection: .wifi, direction: .incoming, category: categoryValue).key, outgoingOtherKey: UsageCalculationTag(connection: .wifi, direction: .outgoing, category: categoryValue).key)
 }
 
 public struct NetworkUsageStatsDirectionsEntry: Equatable {

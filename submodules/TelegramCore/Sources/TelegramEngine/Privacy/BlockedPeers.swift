@@ -30,6 +30,8 @@ func _internal_requestUpdatePeerIsBlocked(account: Account, peerId: PeerId, isBl
                                 }
                                 return previous.withUpdatedIsBlocked(isBlocked)
                             })
+                            // Yougram: mirror messaging block changes into the local blocked-peer index.
+                            yougramSetPeerBlocked(transaction: transaction, peerId: peerId, isBlocked: isBlocked)
                         }
                     }
                 }

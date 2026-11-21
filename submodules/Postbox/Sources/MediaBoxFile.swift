@@ -89,7 +89,92 @@ final class MediaBoxPartialFile {
             return nil
         }
         let _ = fd.seek(position: Int64(clippedRange.lowerBound))
-        return fd.readData(count: Int(clippedRange.upperBound - clippedRange.lowerBound))
+        let raw = fd.readData(count: Int(clippedRange.upperBound - clippedRange.lowerBound))
+        if let keys = PostboxLocalEncryption.current {
+            guard let salt = fileMap.partialSalt, let iv = fileMap.partialIV else {
+                return nil
+            }
+            let count = raw.count
+            if count == 0 {
+                return raw
+            }
+            var plain = Data(count: count)
+            let ok = raw.withUnsafeBytes { rawSrc -> Bool in
+                plain.withUnsafeMutableBytes { rawDst -> Bool in
+                    guard let srcBase = rawSrc.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                          let dstBase = rawDst.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                        return false
+                    }
+                    return YougramChunkedFileCrypto.transformPartialBytes(
+                        input: srcBase,
+                        count: count,
+                        fileOffset: clippedRange.lowerBound,
+                        salt: salt,
+                        iv: iv,
+                        mediaKey: keys.mediaKey,
+                        output: dstBase
+                    )
+                }
+            }
+            return ok ? plain : nil
+        }
+        return raw
+    }
+
+    static func internal_readPartialData(
+        manager: MediaBoxFileManager,
+        path: String,
+        metaPath: String,
+        range: Range<Int64>,
+        into buffer: UnsafeMutablePointer<UInt8>,
+        maxCount: Int
+    ) -> Int? {
+        guard maxCount >= 0 else { return nil }
+        guard let fd = ManagedFile(queue: nil, path: path, mode: .read) else {
+            return nil
+        }
+        guard let fileMap = try? MediaBoxFileMap.read(manager: manager, path: metaPath) else {
+            return nil
+        }
+        guard let clippedRange = fileMap.contains(range) else {
+            return nil
+        }
+        let targetCount = min(maxCount, Int(clippedRange.upperBound - clippedRange.lowerBound))
+        if targetCount == 0 {
+            return 0
+        }
+        let _ = fd.seek(position: Int64(clippedRange.lowerBound))
+        if let keys = PostboxLocalEncryption.current {
+            guard let salt = fileMap.partialSalt, let iv = fileMap.partialIV else {
+                return nil
+            }
+            var cipher = [UInt8](repeating: 0, count: targetCount)
+            let actualRead = cipher.withUnsafeMutableBytes { rawBuf -> Int in
+                guard let base = rawBuf.baseAddress else { return -1 }
+                return fd.read(base, targetCount)
+            }
+            guard actualRead > 0 else {
+                return actualRead == 0 ? 0 : nil
+            }
+            let ok = cipher.withUnsafeBytes { rawSrc -> Bool in
+                guard let srcBase = rawSrc.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return false
+                }
+                return YougramChunkedFileCrypto.transformPartialBytes(
+                    input: srcBase,
+                    count: actualRead,
+                    fileOffset: clippedRange.lowerBound,
+                    salt: salt,
+                    iv: iv,
+                    mediaKey: keys.mediaKey,
+                    output: buffer
+                )
+            }
+            return ok ? actualRead : nil
+        } else {
+            let actualRead = fd.read(buffer, targetCount)
+            return actualRead >= 0 ? actualRead : nil
+        }
     }
     
     static func internal_extractPartialData(manager: MediaBoxFileManager, path: String, metaPath: String, range: Range<Int64>) -> (file: ManagedFile, length: Int)? {

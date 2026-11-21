@@ -535,7 +535,8 @@ public extension Message {
         }
     }
     
-    func isCopyProtected() -> Bool {
+    // Yougram: raw server-side copy protection check (preserved for Forward requests that the server rejects).
+    func isServerCopyProtected() -> Bool {
         if self.flags.contains(.CopyProtected) {
             return true
         } else if let group = self.peers[self.id.peerId] as? TelegramGroup, group.flags.contains(.copyProtectionEnabled) {
@@ -545,6 +546,13 @@ public extension Message {
         } else {
             return false
         }
+    }
+
+    func isCopyProtected() -> Bool {
+        if YougramCoreOptions.allowCopyProtectedContent {
+            return false
+        }
+        return self.isServerCopyProtected()
     }
     
     func isSensitiveContent(platform: String, contentSettings: ContentSettings) -> Bool {

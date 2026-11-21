@@ -2,6 +2,13 @@ import Foundation
 import RangeSet
 import SwiftSignalKit
 
+private func logicalMediaFileSize(_ path: String) -> Int64? {
+    if let keys = PostboxLocalEncryption.current {
+        return YougramChunkedFileCrypto.plaintextSize(atPath: path, keys: keys)
+    }
+    return fileSize(path)
+}
+
 public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     private final class RangeRequest {
         let value: Range<Int64>
@@ -159,13 +166,19 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
                     }
                 } catch {
                     let _ = try? FileManager.default.removeItem(atPath: self.metaPath)
+                    if PostboxLocalEncryption.isActive {
+                        let _ = try? FileManager.default.removeItem(atPath: self.partialPath)
+                    }
                     self.fileMap = MediaBoxFileMap()
+                    if PostboxLocalEncryption.isActive {
+                        self.fileMap.serialize(manager: self.manager, to: self.metaPath)
+                    }
                 }
             }
             
             self.destinationFile = self.manager.open(path: self.partialPath, mode: .readwrite)
             
-            if FileManager.default.fileExists(atPath: self.fullPath) {
+            if logicalMediaFileSize(self.fullPath) != nil {
                 self.isComplete = true
             }
         }
@@ -436,28 +449,74 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
                     return
                 }
             case let .moveLocalFile(path):
-                do {
-                    try FileManager.default.moveItem(atPath: path, toPath: self.fullPath)
-                    self.processMovedFile()
-                } catch let e {
-                    postboxLog("MediaBoxFileContextV2Impl: error moving temp file at \(self.fullPath): \(e)")
-                    self.processFetchError(error: .generic, from: nil)
+                if let keys = PostboxLocalEncryption.current {
+                    let originalName = String(data: self.resourceId, encoding: .utf8) ?? URL(fileURLWithPath: self.fullPath).lastPathComponent
+                    do {
+                        try YougramChunkedFileCrypto.encryptFile(fromPath: path, originalFileName: originalName, toPath: self.fullPath, keys: keys)
+                        let _ = try? FileManager.default.removeItem(atPath: path)
+                        PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: self.fullPath)
+                        self.processMovedFile()
+                    } catch let e {
+                        postboxLog("MediaBoxFileContextV2Impl: error encrypting local file at \(self.fullPath): \(e)")
+                        self.processFetchError(error: .generic, from: nil)
+                    }
+                } else {
+                    do {
+                        try FileManager.default.moveItem(atPath: path, toPath: self.fullPath)
+                        self.processMovedFile()
+                    } catch let e {
+                        postboxLog("MediaBoxFileContextV2Impl: error moving temp file at \(self.fullPath): \(e)")
+                        self.processFetchError(error: .generic, from: nil)
+                    }
                 }
             case let .moveTempFile(file):
-                do {
-                    try FileManager.default.moveItem(atPath: file.path, toPath: self.fullPath)
-                    self.processMovedFile()
-                } catch let e {
-                    postboxLog("MediaBoxFileContextV2Impl: error moving temp file at \(self.fullPath): \(e)")
-                    self.processFetchError(error: .generic, from: nil)
+                if let keys = PostboxLocalEncryption.current {
+                    let originalName = String(data: self.resourceId, encoding: .utf8) ?? URL(fileURLWithPath: self.fullPath).lastPathComponent
+                    do {
+                        try YougramChunkedFileCrypto.encryptFile(fromPath: file.path, originalFileName: originalName, toPath: self.fullPath, keys: keys)
+                        PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: self.fullPath)
+                        self.processMovedFile()
+                    } catch let e {
+                        postboxLog("MediaBoxFileContextV2Impl: error encrypting temp file at \(self.fullPath): \(e)")
+                        self.processFetchError(error: .generic, from: nil)
+                    }
+                } else {
+                    do {
+                        try FileManager.default.moveItem(atPath: file.path, toPath: self.fullPath)
+                        self.processMovedFile()
+                    } catch let e {
+                        postboxLog("MediaBoxFileContextV2Impl: error moving temp file at \(self.fullPath): \(e)")
+                        self.processFetchError(error: .generic, from: nil)
+                    }
                 }
                 TempBox.shared.dispose(file)
             case let .copyLocalItem(localItem):
-                if localItem.copyTo(url: URL(fileURLWithPath: self.fullPath)) {
-                    self.processMovedFile()
+                if let keys = PostboxLocalEncryption.current {
+                    let originalName = String(data: self.resourceId, encoding: .utf8) ?? URL(fileURLWithPath: self.fullPath).lastPathComponent
+                    let tmpPath = PostboxLocalEncryption.ephemeralCache.ephemeralTempFilePath()
+                    if localItem.copyTo(url: URL(fileURLWithPath: tmpPath)) {
+                        do {
+                            try YougramChunkedFileCrypto.encryptFile(fromPath: tmpPath, originalFileName: originalName, toPath: self.fullPath, keys: keys)
+                            let _ = try? FileManager.default.removeItem(atPath: tmpPath)
+                            PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: self.fullPath)
+                            self.processMovedFile()
+                        } catch let e {
+                            let _ = try? FileManager.default.removeItem(atPath: tmpPath)
+                            postboxLog("MediaBoxFileContextV2Impl: error encrypting local item at \(self.fullPath): \(e)")
+                            self.processFetchError(error: .generic, from: nil)
+                        }
+                    } else {
+                        let _ = try? FileManager.default.removeItem(atPath: tmpPath)
+                        postboxLog("MediaBoxFileContextV2Impl: error copying local item to \(self.fullPath)")
+                        self.processFetchError(error: .generic, from: nil)
+                    }
                 } else {
-                    postboxLog("MediaBoxFileContextV2Impl: error copying local item to \(self.fullPath)")
-                    self.processFetchError(error: .generic, from: nil)
+                    if localItem.copyTo(url: URL(fileURLWithPath: self.fullPath)) {
+                        self.processMovedFile()
+                    } else {
+                        postboxLog("MediaBoxFileContextV2Impl: error copying local item to \(self.fullPath)")
+                        self.processFetchError(error: .generic, from: nil)
+                    }
                 }
             case .reset:
                 if !self.fileMap.ranges.isEmpty {
@@ -478,6 +537,37 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
         /// flushed to disk first.
         private func linkCompleteFileIfFullyWritten() {
             if !self.isComplete, let truncationSize = self.fileMap.truncationSize, truncationSize == self.fileMap.sum {
+                if let keys = PostboxLocalEncryption.current {
+                    self.destinationFile?.sync()
+                    let originalName = String(data: self.resourceId, encoding: .utf8) ?? URL(fileURLWithPath: self.fullPath).lastPathComponent
+                    do {
+                        if truncationSize == 0 && !FileManager.default.fileExists(atPath: self.partialPath) {
+                            try YougramChunkedFileCrypto.encryptData(Data(), originalFileName: originalName, toPath: self.fullPath, keys: keys)
+                        } else if let salt = self.fileMap.partialSalt, let iv = self.fileMap.partialIV {
+                            try YougramChunkedFileCrypto.convertPartialToChunked(
+                                partialPath: self.partialPath,
+                                plaintextSize: truncationSize,
+                                salt: salt,
+                                iv: iv,
+                                originalFileName: originalName,
+                                toCompletePath: self.fullPath,
+                                keys: keys
+                            )
+                        } else {
+                            postboxLog("MediaBoxFileContextV2Impl: missing CTR material for \(self.partialPath)")
+                            return
+                        }
+                        self.isComplete = true
+                        self.destinationFile = nil
+                        PostboxLocalEncryption.ephemeralCache.evict(encryptedPath: self.fullPath)
+                        unlink(self.partialPath)
+                        unlink(self.metaPath)
+                    } catch let e {
+                        postboxLog("MediaBoxFileContextV2Impl: error finalizing encrypted partial \(self.partialPath): \(e)")
+                    }
+                    return
+                }
+
                 self.isComplete = true
                 
                 self.destinationFile?.sync()
@@ -496,15 +586,59 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
                 postboxLog("MediaBoxFileContextV2Impl: no destination file for \(self.partialPath)")
                 return false
             }
+
+            // Yougram: encrypt sparse partial slice with AES-256-CTR at exact resourceOffset.
+            var writeData = data
+            var writeLowerBound = Int(dataRange.lowerBound)
+            if let keys = PostboxLocalEncryption.current {
+                if self.fileMap.partialSalt == nil || self.fileMap.partialIV == nil {
+                    self.fileMap.serialize(manager: self.manager, to: self.metaPath)
+                }
+                guard let salt = self.fileMap.partialSalt, let iv = self.fileMap.partialIV else {
+                    postboxLog("MediaBoxFileContextV2Impl: missing partial CTR key material for \(self.partialPath)")
+                    return false
+                }
+                var encrypted = Data(count: dataRange.count)
+                if dataRange.count > 0 {
+                    let ok = data.withUnsafeBytes { rawSrc -> Bool in
+                        encrypted.withUnsafeMutableBytes { rawDst -> Bool in
+                            guard let srcBase = rawSrc.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                                  let dstBase = rawDst.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                                return false
+                            }
+                            return YougramChunkedFileCrypto.transformPartialBytes(
+                                input: srcBase.advanced(by: Int(dataRange.lowerBound)),
+                                count: dataRange.count,
+                                fileOffset: resourceOffset,
+                                salt: salt,
+                                iv: iv,
+                                mediaKey: keys.mediaKey,
+                                output: dstBase
+                            )
+                        }
+                    }
+                    guard ok else {
+                        postboxLog("MediaBoxFileContextV2Impl: CTR encryption failed for \(self.partialPath)")
+                        return false
+                    }
+                }
+                writeData = encrypted
+                writeLowerBound = 0
+            }
             
             var failure: String?
             do {
                 try destinationFile.access { fd in
                     if fd.seek(position: resourceOffset) {
-                        let written = data.withUnsafeBytes { rawBytes -> Int in
-                            let bytes = rawBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
-                            
-                            return fd.write(bytes.advanced(by: Int(dataRange.lowerBound)), count: dataRange.count)
+                        let written: Int
+                        if dataRange.count == 0 {
+                            written = 0
+                        } else {
+                            written = writeData.withUnsafeBytes { rawBytes -> Int in
+                                guard let baseAddress = rawBytes.baseAddress else { return -1 }
+                                let bytes = baseAddress.assumingMemoryBound(to: UInt8.self)
+                                return fd.write(bytes.advanced(by: writeLowerBound), count: dataRange.count)
+                            }
                         }
                         // `write(2)` may return short (disk full, file-size limit) or -1.
                         // Only a full write may be recorded in the map: the map is the
@@ -546,7 +680,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
         }
         
         private func processMovedFile() {
-            if let size = fileSize(self.fullPath) {
+            if let size = logicalMediaFileSize(self.fullPath) {
                 self.isComplete = true
                 self.storageBox?.update(id: self.resourceId, size: size)
                 
@@ -632,7 +766,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
         private func updatePartialDataRequest(request: PartialDataRequest) -> Bool {
             assert(self.queue.isCurrent())
             
-            if self.isComplete, let size = fileSize(self.fullPath) {
+            if self.isComplete, let size = logicalMediaFileSize(self.fullPath) {
                 var clampedLowerBound = request.range.lowerBound
                 var clampedUpperBound = request.range.upperBound
                 if clampedUpperBound > size {
@@ -708,7 +842,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
             assert(self.queue.isCurrent())
             
             let status: RangeSet<Int64>
-            if self.isComplete, let size = fileSize(self.fullPath) {
+            if self.isComplete, let size = logicalMediaFileSize(self.fullPath) {
                 status = RangeSet(0 ..< size)
             } else {
                 status = self.fileMap.ranges
@@ -795,7 +929,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     public func data(range: Range<Int64>, waitUntilAfterInitialFetch: Bool, next: @escaping (MediaResourceData) -> Void) -> Disposable {
         assert(self.queue.isCurrent())
         
-        if let size = fileSize(self.path) {
+        if let size = logicalMediaFileSize(self.path) {
             var clampedLowerBound = range.lowerBound
             var clampedUpperBound = range.upperBound
             if clampedUpperBound > size {
@@ -826,7 +960,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     ) -> Disposable {
         assert(self.queue.isCurrent())
         
-        if FileManager.default.fileExists(atPath: self.path) {
+        if logicalMediaFileSize(self.path) != nil {
             completed()
             return EmptyDisposable
         } else {
@@ -850,7 +984,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     ) -> Disposable {
         assert(self.queue.isCurrent())
         
-        if FileManager.default.fileExists(atPath: self.path) {
+        if logicalMediaFileSize(self.path) != nil {
             completed()
             return EmptyDisposable
         } else {
@@ -878,7 +1012,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     public func rangeStatus(next: @escaping (RangeSet<Int64>) -> Void, completed: @escaping () -> Void) -> Disposable {
         assert(self.queue.isCurrent())
         
-        if let size = fileSize(self.path) {
+        if let size = logicalMediaFileSize(self.path) {
             next(RangeSet<Int64>([0 ..< Int64(size) as Range<Int64>]))
             completed()
             
@@ -893,7 +1027,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     public func status(next: @escaping (MediaResourceStatus) -> Void, completed: @escaping () -> Void, size: Int64?) -> Disposable {
         assert(self.queue.isCurrent())
         
-        if let _ = fileSize(self.path) {
+        if let _ = logicalMediaFileSize(self.path) {
             next(.Local)
             completed()
             
@@ -906,7 +1040,7 @@ public final class MediaBoxFileContextV2Impl: MediaBoxFileContext {
     }
     
     public func internalStore(data: Data, range: Range<Int64>) {
-        if let _ = fileSize(self.path) {
+        if let _ = logicalMediaFileSize(self.path) {
         } else {
             self.withPartialState { partialState in
                 partialState.internalStore(data: data, range: range)

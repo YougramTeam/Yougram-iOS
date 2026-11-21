@@ -417,6 +417,24 @@ public final class AppLockContextImpl: AppLockContext {
             }
         }
     }
+
+    // Yougram: pre-boot App Passcode vault unlock updates lockState.json so AppLock does not double-prompt.
+    public static func markUnlockedFromVault(rootPath: String) {
+        let path = appLockStatePath(rootPath: rootPath)
+        var state = LockState()
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           let decoded = try? JSONDecoder().decode(LockState.self, from: data) {
+            state = decoded
+        }
+        state.isManuallyLocked = false
+        state.unlockAttempts = nil
+        var bootTimestamp: Int32 = 0
+        let uptime = getDeviceUptimeSeconds(&bootTimestamp)
+        state.applicationActivityTimestamp = MonotonicTimestamp(bootTimestamp: bootTimestamp, uptime: uptime)
+        if let data = try? JSONEncoder().encode(state) {
+            let _ = try? data.write(to: URL(fileURLWithPath: path), options: [.atomic])
+        }
+    }
     
     public func lock() {
         PasscodeSession.setApplicationAvailable(false)

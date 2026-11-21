@@ -249,7 +249,7 @@ public final class SqliteValueBox: ValueBox {
     private let isReadOnly: Bool
     private let useCaches: Bool
     private let inMemory: Bool
-    private let encryptionParameters: ValueBoxEncryptionParameters?
+    private var encryptionParameters: ValueBoxEncryptionParameters?
     private let databasePath: String
     /// Whether this connection may delete the database to recover from an error. Folded from
     /// the caller's request and the connection kind: only the owning read-write connection
@@ -509,6 +509,11 @@ public final class SqliteValueBox: ValueBox {
                 if case .unreadable = keyedProbe {
                     postboxLog("Encryption key is invalid")
 
+                    // Yougram: never wipe a locally encrypted database on key mismatch.
+                    if PostboxLocalEncryption.isActive {
+                        return nil
+                    }
+
                     // removeDatabaseOnError already folds in isReadOnly / isTemporary.
                     if !self.removeDatabaseOnError {
                         return nil
@@ -518,7 +523,8 @@ public final class SqliteValueBox: ValueBox {
                 }
             } else {
                 postboxLog("Encryption key is required")
-                if !self.removeDatabaseOnError {
+                // Yougram: never wipe if local encryption is active.
+                if PostboxLocalEncryption.isActive || !self.removeDatabaseOnError {
                     return nil
                 }
                 
@@ -2535,6 +2541,181 @@ public final class SqliteValueBox: ValueBox {
         precondition(resultCode)
         resultCode = self.database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         precondition(resultCode)
+    }
+
+    // Yougram: re-key a live SqliteValueBox in place (plaintext <-> encrypted or key rotation), verifying the exported copy before swap.
+    public func rekey(to newParameters: ValueBoxEncryptionParameters?) throws {
+        precondition(self.queue.isCurrent())
+        precondition(!self.isReadOnly)
+
+        self.lock.lock()
+        defer {
+            self.lock.unlock()
+        }
+
+        guard let currentDatabase = self.database else {
+            throw YougramLocalEncryptionError.ioFailed
+        }
+
+        self.clearStatements()
+
+        let targetDir = self.basePath + "/db_rekey"
+        try SqliteValueBox.exportAndVerifyDatabase(
+            sourceDatabase: currentDatabase,
+            toDirectory: targetDir,
+            newParameters: newParameters
+        )
+
+        currentDatabase.close()
+        self.database = nil
+        SqliteValueBox.removeDatabaseFiles(databasePath: self.databasePath)
+        for name in databaseFileNames {
+            let src = targetDir + "/\(name)"
+            if FileManager.default.fileExists(atPath: src) {
+                let _ = try FileManager.default.moveItem(atPath: src, toPath: self.basePath + "/\(name)")
+            }
+        }
+        let _ = try? FileManager.default.removeItem(atPath: targetDir)
+
+        self.encryptionParameters = newParameters
+        self.tables.removeAll()
+        self.fullTextTables.removeAll()
+        guard let reopened = self.openDatabase(encryptionParameters: newParameters, isTemporary: self.isTemporary, isReadOnly: self.isReadOnly, upgradeProgress: { _ in }) else {
+            throw YougramLocalEncryptionError.ioFailed
+        }
+        self.database = reopened
+    }
+
+    // Yougram: idempotent crash-recoverable standalone rekey for a closed database directory.
+    public static func rekeyStandaloneDatabase(basePath: String, from oldParameters: ValueBoxEncryptionParameters?, to newParameters: ValueBoxEncryptionParameters?) throws {
+        let dbPath = basePath + "/db_sqlite"
+        let targetDir = basePath + "/db_rekey"
+        let _ = try? FileManager.default.removeItem(atPath: targetDir)
+
+        guard FileManager.default.fileExists(atPath: dbPath) else {
+            return
+        }
+
+        if let alreadyTarget = SqliteValueBox.openAndVerifyDatabase(path: dbPath, parameters: newParameters, readOnly: false) {
+            let _ = alreadyTarget.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            alreadyTarget.close()
+            return
+        }
+
+        let sourceDatabase: Database
+        if let openedWithOld = SqliteValueBox.openAndVerifyDatabase(path: dbPath, parameters: oldParameters, readOnly: false) {
+            sourceDatabase = openedWithOld
+        } else if oldParameters != nil, let openedPlain = SqliteValueBox.openAndVerifyDatabase(path: dbPath, parameters: nil, readOnly: false) {
+            sourceDatabase = openedPlain
+        } else {
+            throw YougramLocalEncryptionError.authenticationFailed
+        }
+
+        do {
+            try SqliteValueBox.exportAndVerifyDatabase(
+                sourceDatabase: sourceDatabase,
+                toDirectory: targetDir,
+                newParameters: newParameters
+            )
+        } catch {
+            sourceDatabase.close()
+            let _ = try? FileManager.default.removeItem(atPath: targetDir)
+            throw error
+        }
+
+        sourceDatabase.close()
+        SqliteValueBox.removeDatabaseFiles(databasePath: dbPath)
+        for name in databaseFileNames {
+            let src = targetDir + "/\(name)"
+            if FileManager.default.fileExists(atPath: src) {
+                let _ = try FileManager.default.moveItem(atPath: src, toPath: basePath + "/\(name)")
+            }
+        }
+        let _ = try? FileManager.default.removeItem(atPath: targetDir)
+    }
+
+    private static func openAndVerifyDatabase(path: String, parameters: ValueBoxEncryptionParameters?, readOnly: Bool) -> Database? {
+        guard let db = Database(path, readOnly: readOnly) else {
+            return nil
+        }
+        sqlite3_busy_timeout(db.handle, 5 * 1000)
+        if !db.execute("PRAGMA cipher_plaintext_header_size=32") || !db.execute("PRAGMA cipher_default_plaintext_header_size=32") {
+            return nil
+        }
+        if let parameters {
+            precondition(parameters.salt.data.count == 16)
+            precondition(parameters.key.data.count == 32)
+            let hexKey = hexString(parameters.key.data + parameters.salt.data)
+            if !db.execute("PRAGMA key=\"x'\(hexKey)'\"") {
+                return nil
+            }
+        }
+        var statement: OpaquePointer? = nil
+        let prepStatus = sqlite3_prepare_v2(db.handle, "SELECT count(*) FROM sqlite_master", -1, &statement, nil)
+        guard prepStatus == SQLITE_OK, let statement else {
+            return nil
+        }
+        let stepStatus = sqlite3_step(statement)
+        sqlite3_finalize(statement)
+        guard stepStatus == SQLITE_ROW else {
+            return nil
+        }
+        return db
+    }
+
+    private static func exportAndVerifyDatabase(sourceDatabase: Database, toDirectory targetDir: String, newParameters: ValueBoxEncryptionParameters?) throws {
+        let _ = try? FileManager.default.removeItem(atPath: targetDir)
+        try FileManager.default.createDirectory(atPath: targetDir, withIntermediateDirectories: true, attributes: nil)
+        let exportFilePath = "\(targetDir)/db_sqlite"
+        let escapedPath = exportFilePath.replacingOccurrences(of: "'", with: "''")
+
+        let _ = sourceDatabase.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        var userVersion: Int64 = 0
+        do {
+            var uvStmt: OpaquePointer? = nil
+            if sqlite3_prepare_v2(sourceDatabase.handle, "PRAGMA user_version", -1, &uvStmt, nil) == SQLITE_OK, let uvStmt {
+                if sqlite3_step(uvStmt) == SQLITE_ROW {
+                    userVersion = sqlite3_column_int64(uvStmt, 0)
+                }
+                sqlite3_finalize(uvStmt)
+            }
+        }
+
+        let attachSql: String
+        if let newParameters {
+            precondition(newParameters.salt.data.count == 16)
+            precondition(newParameters.key.data.count == 32)
+            let hexKey = hexString(newParameters.key.data + newParameters.salt.data)
+            guard sourceDatabase.execute("PRAGMA cipher_default_plaintext_header_size=32") else {
+                throw YougramLocalEncryptionError.ioFailed
+            }
+            attachSql = "ATTACH DATABASE '\(escapedPath)' AS rekeyed KEY \"x'\(hexKey)'\""
+        } else {
+            guard sourceDatabase.execute("PRAGMA cipher_default_plaintext_header_size=0") else {
+                throw YougramLocalEncryptionError.ioFailed
+            }
+            attachSql = "ATTACH DATABASE '\(escapedPath)' AS rekeyed KEY ''"
+        }
+
+        guard sourceDatabase.execute(attachSql) else {
+            let _ = sourceDatabase.execute("PRAGMA cipher_default_plaintext_header_size=32")
+            throw YougramLocalEncryptionError.ioFailed
+        }
+
+        let exported = sourceDatabase.execute("SELECT sqlcipher_export('rekeyed')")
+        let versionSet = sourceDatabase.execute("PRAGMA rekeyed.user_version=\(userVersion)")
+        let detached = sourceDatabase.execute("DETACH DATABASE rekeyed")
+        let _ = sourceDatabase.execute("PRAGMA cipher_default_plaintext_header_size=32")
+
+        guard exported && versionSet && detached else {
+            throw YougramLocalEncryptionError.ioFailed
+        }
+
+        guard let verified = SqliteValueBox.openAndVerifyDatabase(path: exportFilePath, parameters: newParameters, readOnly: true) else {
+            throw YougramLocalEncryptionError.authenticationFailed
+        }
+        verified.close()
     }
 }
 

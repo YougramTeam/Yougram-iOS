@@ -121,8 +121,15 @@ func yougramHoldGhostReadInsteadOfPush(postbox: Postbox, peerId: PeerId, confirm
 /// topic or a monoforum thread it sends that thread's read mark; elsewhere, the chat's held read state, if it has one.
 func _internal_yougramReadOnInteract(postbox: Postbox, network: Network, stateManager: AccountStateManager, peerId: PeerId, threadId: Int64?) -> Signal<Never, NoError> {
     let options = YougramCoreOptions.ghostMode
-    guard options.hideReadReceipts && options.readOnInteract else {
-        return .complete()
+    if options.hideReadReceipts {
+        guard options.readOnInteract else {
+            return .complete()
+        }
+    } else {
+        return postbox.transaction { transaction -> Signal<Never, NoError> in
+            return yougramPushHeldReadState(postbox: postbox, network: network, stateManager: stateManager, peerId: peerId)
+        }
+        |> switchToLatest
     }
     return postbox.transaction { transaction -> Signal<Never, NoError> in
         guard let peer = transaction.getPeer(peerId) else {

@@ -90,6 +90,10 @@ func _internal_stopIncomingTypingDraft(postbox: Postbox, network: Network, peerI
         guard let (inputPeer, randomId) = result else {
             return .complete()
         }
+        // Yougram: Ghost Mode suppresses typing/draft stop network indicator.
+        if YougramCoreOptions.ghostMode.hideTyping {
+            return .complete()
+        }
         var flags: Int32 = 0
         let topMessageId = threadId.flatMap { Int32(clamping: $0) }
         if topMessageId != nil {

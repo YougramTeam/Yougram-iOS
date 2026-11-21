@@ -225,14 +225,21 @@ public class ShareRootControllerImpl {
             mainWindow.hostView.containerView.frame = bounds
             
             let rootPath = rootPathForBasePath(self.initializationData.appGroupPath)
-            performAppGroupUpgrades(appGroupPath: self.initializationData.appGroupPath, rootPath: rootPath)
-            
-            EngineTempBox.initializeShared(basePath: rootPath, processType: "share", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
-            
-            let logsPath = rootPath + "/logs/share-logs"
-            let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-            
-            setupSharedLogger(rootPath: rootPath, path: logsPath)
+            if YougramLocalEncryptionBridge.isActive {
+                EngineTempBox.initializeShared(basePath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), processType: "share", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+                let logsPath = YougramLocalEncryptionBridge.ephemeralTempBoxBasePath() + "/logs"
+                setupSharedLogger(rootPath: YougramLocalEncryptionBridge.ephemeralTempBoxBasePath(), path: logsPath)
+                Logger.shared.logToFile = false
+            } else {
+                performAppGroupUpgrades(appGroupPath: self.initializationData.appGroupPath, rootPath: rootPath)
+                
+                EngineTempBox.initializeShared(basePath: rootPath, processType: "share", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+                
+                let logsPath = rootPath + "/logs/share-logs"
+                let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
+                
+                setupSharedLogger(rootPath: rootPath, path: logsPath)
+            }
             
             let applicationBindings = TelegramApplicationBindings(isMainApp: false, appBundleId: self.initializationData.appBundleId, appBuildType: self.initializationData.appBuildType, containerPath: self.initializationData.appGroupPath, appSpecificScheme: "tg", openUrl: { [weak self] url in
                 self?.openUrl(url)
@@ -287,7 +294,8 @@ public class ShareRootControllerImpl {
                 })
                 semaphore.wait()
                 
-                Logger.shared.logToFile = loggingSettings.logToFile
+                // Yougram: never enable persistent file logging when local encryption is active.
+                Logger.shared.logToFile = loggingSettings.logToFile && !YougramLocalEncryptionBridge.isActive
                 Logger.shared.logToConsole = loggingSettings.logToConsole
                 Logger.shared.redactSensitiveData = loggingSettings.redactSensitiveData
             }
@@ -334,7 +342,8 @@ public class ShareRootControllerImpl {
             }
             |> castError(ShareAuthorizationError.self)
             |> mapToSignal { sharedContext, loggingSettings -> Signal<(SharedAccountContextImpl, Account, [AccountWithInfo]), ShareAuthorizationError> in
-                Logger.shared.logToFile = loggingSettings.logToFile
+                // Yougram: never enable persistent file logging when local encryption is active.
+                Logger.shared.logToFile = loggingSettings.logToFile && !YougramLocalEncryptionBridge.isActive
                 Logger.shared.logToConsole = loggingSettings.logToConsole
                 Logger.shared.redactSensitiveData = loggingSettings.redactSensitiveData
                 

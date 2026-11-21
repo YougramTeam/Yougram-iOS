@@ -1876,6 +1876,17 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
         )
         
         let contentSettings = self.context.engine.data.subscribe(TelegramEngine.EngineData.Item.Configuration.ContentSettings())
+
+        // Yougram: reactive set of blocked peer IDs when local filtering is enabled.
+        let hiddenBlockedPeerIds: Signal<Set<PeerId>, NoError> = combineLatest(
+            YougramSettings.updates |> map(\.hideBlockedUsersMessages) |> distinctUntilChanged,
+            self.context.engine.privacy.yougramBlockedPeerIds()
+        )
+        |> map { hideBlocked, blockedIds -> Set<PeerId> in
+            return hideBlocked ? blockedIds : Set()
+        }
+        |> distinctUntilChanged
+        let contentSettingsAndBlocked = combineLatest(contentSettings, hiddenBlockedPeerIds)
         
         let maxReadStoryId: Signal<Int32?, NoError>
         if let peerId = self.chatLocation.peerId, peerId.namespace == Namespaces.Peer.CloudUser {
@@ -1983,8 +1994,9 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
             audioTranscriptionTrial |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_audioTranscriptionTrial"),
             chatThemes |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_chatThemes"),
             deviceContactsNumbers |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_deviceContactsNumbers"),
-            contentSettings |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_contentSettings")
-        ) |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")).startStrict(next: { [weak self] update, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags, defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettings in
+            contentSettingsAndBlocked |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_contentSettings")
+        ) |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")).startStrict(next: { [weak self] update, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags, defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettingsAndBlocked in
+            let (contentSettings, hiddenBlockedPeerIds) = contentSettingsAndBlocked
             let (animatedEmojiStickers, premiumGiftStickers, tonGiftStickers) = animatedEmojiAndGiftStickers
             let (historyAppearsCleared, pendingUnpinnedAllMessages, pendingRemovedMessages, currentlyPlayingMessageIdAndType, scrollToMessageId, chatHasBots, allAdMessages) = promises
             
@@ -2206,7 +2218,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                             }
                         }
                     } else if case let .cachedPeerData(_, cachedData) = entry, let cachedUserData = cachedData as? CachedUserData {
-                        if !isCopyProtectionEnabled {
+                        if !isCopyProtectionEnabled && !YougramCoreOptions.allowCopyProtectedContent {
                             isCopyProtectionEnabled = cachedUserData.flags.contains(.copyProtectionEnabled) || cachedUserData.flags.contains(.myCopyProtectionEnabled)
                         }
                     }
@@ -2288,7 +2300,8 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                     adMessage: allAdMessages.fixed,
                     dynamicAdMessages: allAdMessages.opportunistic,
                     isMusicPlaylist: isMusicPlaylist,
-                    pinToTopStableId: pinToTopStableId
+                    pinToTopStableId: pinToTopStableId,
+                    hiddenBlockedPeerIds: hiddenBlockedPeerIds
                 )
                 let lastHeaderId = filteredEntries.last.flatMap { listMessageDateHeaderId(timestamp: $0.index.timestamp) } ?? 0
                 let processedView = ChatHistoryView(originalView: view, filteredEntries: filteredEntries, associatedData: associatedData, lastHeaderId: lastHeaderId, id: id, locationInput: update.2, ignoreMessagesInTimestampRange: update.3, ignoreMessageIds: update.4)

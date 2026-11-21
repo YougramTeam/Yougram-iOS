@@ -16,6 +16,8 @@ enum YougramSettingsLink: Equatable {
     case chats
     case privacy
     case ghostMode
+    case localHistory
+    case localEncryption
     case accountsBackup
     case contextMenu
     case duressCode
@@ -26,7 +28,7 @@ enum YougramSettingsLink: Equatable {
 enum YougramSettingsEntry: ItemListNodeEntry {
     case appHeader(id: Int32, section: Int32, version: String, text: String)
     case header(id: Int32, section: Int32, text: String)
-    case toggle(id: Int32, section: Int32, title: String, value: Bool, key: WritableKeyPath<YougramSettings, Bool>, requiresRestart: Bool)
+    case toggle(id: Int32, section: Int32, title: String, value: Bool, key: WritableKeyPath<YougramSettings, Bool>, enabled: Bool, requiresRestart: Bool)
     case contextMenuToggle(id: Int32, section: Int32, title: String, value: Bool, action: YougramContextMenuAction)
     /// A switch whose value lives outside YougramSettings; changes go to `customToggle(tag:)`.
     case taggedToggle(id: Int32, section: Int32, title: String, value: Bool, tag: String)
@@ -37,7 +39,7 @@ enum YougramSettingsEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case let .appHeader(_, section, _, _), let .header(_, section, _), let .toggle(_, section, _, _, _, _),
+        case let .appHeader(_, section, _, _), let .header(_, section, _), let .toggle(_, section, _, _, _, _, _),
              let .contextMenuToggle(_, section, _, _, _), let .taggedToggle(_, section, _, _, _), let .info(_, section, _),
              let .link(_, section, _, _, _, _), let .action(_, section, _, _, _), let .backup(_, section, _, _, _):
             return section
@@ -46,7 +48,7 @@ enum YougramSettingsEntry: ItemListNodeEntry {
 
     var stableId: Int32 {
         switch self {
-        case let .appHeader(id, _, _, _), let .header(id, _, _), let .toggle(id, _, _, _, _, _),
+        case let .appHeader(id, _, _, _), let .header(id, _, _), let .toggle(id, _, _, _, _, _, _),
              let .contextMenuToggle(id, _, _, _, _), let .taggedToggle(id, _, _, _, _), let .info(id, _, _),
              let .link(id, _, _, _, _, _), let .action(id, _, _, _, _), let .backup(id, _, _, _, _):
             return id
@@ -64,8 +66,8 @@ enum YougramSettingsEntry: ItemListNodeEntry {
             return YougramSettingsHeaderItem(theme: presentationData.theme, title: version, text: text, sectionId: section)
         case let .header(_, section, text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: section)
-        case let .toggle(_, section, title, value, key, requiresRestart):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: section, style: .blocks, updated: { value in
+        case let .toggle(_, section, title, value, key, enabled, requiresRestart):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, enabled: enabled, sectionId: section, style: .blocks, updated: { value in
                 arguments.updateToggle(key, value, requiresRestart)
             })
         case let .contextMenuToggle(_, section, title, value, action):
@@ -141,8 +143,9 @@ struct YougramEntriesBuilder {
         self.entries.append(.header(id: self.id(), section: self.section, text: text))
     }
 
-    mutating func toggle(_ title: String, _ settings: YougramSettings, _ key: WritableKeyPath<YougramSettings, Bool>, requiresRestart: Bool = false) {
-        self.entries.append(.toggle(id: self.id(), section: self.section, title: title, value: settings[keyPath: key], key: key, requiresRestart: requiresRestart))
+    mutating func toggle(_ title: String, _ settings: YougramSettings, _ key: WritableKeyPath<YougramSettings, Bool>, enabled: Bool = true, displayValue: Bool? = nil, requiresRestart: Bool = false) {
+        let resolvedValue = displayValue ?? (enabled ? settings[keyPath: key] : false)
+        self.entries.append(.toggle(id: self.id(), section: self.section, title: title, value: resolvedValue, key: key, enabled: enabled, requiresRestart: requiresRestart))
     }
 
     mutating func contextMenuToggle(_ title: String, _ settings: YougramSettings, _ action: YougramContextMenuAction) {

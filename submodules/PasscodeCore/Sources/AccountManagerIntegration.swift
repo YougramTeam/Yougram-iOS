@@ -92,3 +92,53 @@ public func setupAccountManager<Types: AccountManagerTypes>(basePath: String, is
         )
     )
 }
+
+// Yougram: extension vault resolution before opening AccountManager or creating .tempkey.
+public enum YougramExtensionVaultAccess {
+    case disabled
+    case unlocked(EngineValueBoxEncryptionParameters)
+    case locked
+}
+
+public enum YougramExtensionKeyPair {
+    case disabled
+    case unlocked(key: Data, salt: Data)
+    case locked
+}
+
+@available(macOS 10.15, *)
+public func resolveExtensionEncryptionParameters(rootPath: String) -> YougramExtensionVaultAccess {
+    guard YougramVaultStore.shared.isEnabled(rootPath: rootPath) else {
+        return .disabled
+    }
+    if let masterKey = YougramVaultStore.shared.unlockForExtension(rootPath: rootPath) {
+        var mutableKey = masterKey
+        defer {
+            if !mutableKey.isEmpty {
+                mutableKey.resetBytes(in: 0 ..< mutableKey.count)
+            }
+        }
+        YougramLocalEncryptionBridge.activate(masterKey: mutableKey)
+        if let params = YougramLocalEncryptionBridge.activePostboxEncryptionParameters() {
+            return .unlocked(params)
+        }
+    }
+    return .locked
+}
+
+@available(macOS 10.15, *)
+public func resolveExtensionEncryptionKeyPair(rootPath: String) -> YougramExtensionKeyPair {
+    switch resolveExtensionEncryptionParameters(rootPath: rootPath) {
+    case .disabled:
+        return .disabled
+    case let .unlocked(params):
+        return .unlocked(key: params.key.data, salt: params.salt.data)
+    case .locked:
+        return .locked
+    }
+}
+
+@available(macOS 10.15, *)
+public func purgeExtensionEphemeralCache() {
+    YougramLocalEncryptionBridge.purgeEphemeralCache()
+}

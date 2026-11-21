@@ -173,9 +173,11 @@ public final class StorageBox {
             let databasePath = self.basePath + "/db"
             let _ = try? FileManager.default.createDirectory(atPath: databasePath, withIntermediateDirectories: true)
             
+            // Yougram: encrypt StorageBox database when local encryption is active.
+            let storageEncryptionParams = PostboxLocalEncryption.current?.storageBoxDatabaseParameters
             var valueBox: SqliteValueBox?
             for i in 0 ..< 3 {
-                if let valueBoxValue = SqliteValueBox(basePath: basePath + "/db", queue: queue, isTemporary: false, isReadOnly: false, useCaches: isMainProcess, removeDatabaseOnError: isMainProcess, encryptionParameters: nil, upgradeProgress: { _ in }) {
+                if let valueBoxValue = SqliteValueBox(basePath: basePath + "/db", queue: queue, isTemporary: false, isReadOnly: false, useCaches: isMainProcess, removeDatabaseOnError: isMainProcess, encryptionParameters: storageEncryptionParams, upgradeProgress: { _ in }) {
                     valueBox = valueBoxValue
                     break
                 } else {
@@ -186,10 +188,10 @@ public final class StorageBox {
                 }
             }
             
-            if valueBox == nil, isMainProcess {
+            if valueBox == nil, isMainProcess, !PostboxLocalEncryption.isActive {
                 postboxLog("Removing value box at \(basePath + "/db")")
                 let _ = try? FileManager.default.removeItem(atPath: databasePath)
-                valueBox = SqliteValueBox(basePath: databasePath, queue: queue, isTemporary: false, isReadOnly: false, useCaches: isMainProcess, removeDatabaseOnError: isMainProcess, encryptionParameters: nil, upgradeProgress: { _ in })
+                valueBox = SqliteValueBox(basePath: databasePath, queue: queue, isTemporary: false, isReadOnly: false, useCaches: isMainProcess, removeDatabaseOnError: isMainProcess, encryptionParameters: storageEncryptionParams, upgradeProgress: { _ in })
             }
             
             guard let valueBox = valueBox else {
@@ -1207,6 +1209,21 @@ public final class StorageBox {
     public func setCanBeginTransactions(_ value: Bool, afterTransactionIfRunning: @escaping () -> Void) {
         self.impl.with { impl in
             impl.setCanBeginTransactions(value, afterTransactionIfRunning: afterTransactionIfRunning)
+        }
+    }
+
+    // Yougram: re-key StorageBox SQLite database during local encryption migration.
+    public func rekey(to parameters: ValueBoxEncryptionParameters?) throws {
+        var rekeyError: Error?
+        self.impl.syncWith { impl in
+            do {
+                try impl.valueBox.rekey(to: parameters)
+            } catch {
+                rekeyError = error
+            }
+        }
+        if let rekeyError {
+            throw rekeyError
         }
     }
 }

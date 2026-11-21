@@ -977,8 +977,9 @@ extension ChatControllerImpl {
                             }
                         }
                         if let cachedUserData = peerView.cachedData as? CachedUserData {
-                            copyProtectionEnabled = cachedUserData.flags.contains(.copyProtectionEnabled) || cachedUserData.flags.contains(.myCopyProtectionEnabled)
-                            myCopyProtectionEnabled = cachedUserData.flags.contains(.myCopyProtectionEnabled)
+                            // Yougram: unlock copy/download when Allow Copy & Download is enabled.
+                            copyProtectionEnabled = !YougramCoreOptions.allowCopyProtectedContent && (cachedUserData.flags.contains(.copyProtectionEnabled) || cachedUserData.flags.contains(.myCopyProtectionEnabled))
+                            myCopyProtectionEnabled = !YougramCoreOptions.allowCopyProtectedContent && cachedUserData.flags.contains(.myCopyProtectionEnabled)
                         } else {
                             copyProtectionEnabled = peer.isCopyProtectionEnabled
                         }

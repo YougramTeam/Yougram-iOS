@@ -112,14 +112,20 @@ enum WalletVault {
     }
 
     static func removeAll(environment: PasscodeEnvironment, readAttributes: ([String: Any]) -> (OSStatus, CFTypeRef?), delete: ([String: Any]) -> OSStatus) throws {
-        let group = try self.keychainAccessGroup()
+        let group = (try? self.keychainAccessGroup()).flatMap { $0 }
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
             kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll,
             kSecAttrSynchronizable as String: false]
         if let group {
             query[kSecAttrAccessGroup as String] = group
         }
-        let (status, result) = readAttributes(query)
+        var (status, result) = readAttributes(query)
+        var usedGroup = group
+        if status == errSecMissingEntitlement, usedGroup != nil {
+            usedGroup = nil
+            query.removeValue(forKey: kSecAttrAccessGroup as String)
+            (status, result) = readAttributes(query)
+        }
         if status == errSecItemNotFound { return }
         guard status == errSecSuccess, let items = result as? [[String: Any]] else { throw PasscodeError.keychain(status) }
         let servicePrefix = self.servicePrefix(environment: environment)
@@ -130,8 +136,8 @@ enum WalletVault {
             var deletion: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service, kSecAttrAccount as String: account,
                 kSecAttrSynchronizable as String: false]
-            if let group {
-                deletion[kSecAttrAccessGroup as String] = group
+            if let usedGroup {
+                deletion[kSecAttrAccessGroup as String] = usedGroup
             }
             let status = delete(deletion)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw PasscodeError.keychain(status) }

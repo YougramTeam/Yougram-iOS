@@ -11,6 +11,7 @@ import Intents
 import LegacyComponents
 import TelegramPresentationData
 import TelegramUIPreferences
+import YougramSettingsUI
 import DeviceAccess
 import TextFormat
 import TelegramBaseController
@@ -6219,6 +6220,19 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                             f(.dismissWithoutContent)
                             self?.interfaceInteraction?.beginMessageSearch(.everything, "")
                         })))
+
+                        // Yougram: View Deleted shortcut in chat avatar menu when Anti-Recall is enabled.
+                        if YougramCoreOptions.saveDeletedMessages {
+                            items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Yougram_History_ViewDeleted, icon: { theme in
+                                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.actionSheet.primaryTextColor)
+                            }, action: { _, f in
+                                f(.dismissWithoutContent)
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                strongSelf.push(yougramDeletedMessagesController(context: context, peerId: peer.id, peerTitle: EnginePeer(peer).compactDisplayTitle))
+                            })))
+                        }
                                                 
                         return items
                     }
@@ -6469,6 +6483,19 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                             f(.dismissWithoutContent)
                             self?.interfaceInteraction?.beginMessageSearch(.everything, "")
                         })))
+
+                        // Yougram: View Deleted shortcut for this thread when Anti-Recall is enabled.
+                        if YougramCoreOptions.saveDeletedMessages {
+                            items.append(.action(ContextMenuActionItem(text: presentationData.strings.Yougram_History_ViewDeleted, icon: { theme in
+                                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.primaryColor)
+                            }, action: { _, f in
+                                f(.dismissWithoutContent)
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                strongSelf.push(yougramDeletedMessagesController(context: context, peerId: peer.id, peerTitle: EnginePeer(peer).compactDisplayTitle, threadId: threadId))
+                            })))
+                        }
                         
                         if threadId != 1 {
                             var canOpenClose = false

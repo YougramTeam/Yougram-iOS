@@ -197,7 +197,7 @@ API_AVAILABLE(ios(10))
     return APP_CONFIG_IS_SIRI_ENABLED;
 }
 
-+ (NSString * _Nullable)bundleSeedId {
++ (NSString * _Nullable)defaultKeychainAccessGroup {
     NSDictionary *query = [NSDictionary dictionaryWithObjectsAndKeys:
        (__bridge NSString *)kSecClassGenericPassword, (__bridge NSString *)kSecClass,
        @"bundleSeedID", kSecAttrAccount,
@@ -209,22 +209,127 @@ API_AVAILABLE(ios(10))
     if (status == errSecItemNotFound) {
         status = SecItemAdd((__bridge CFDictionaryRef)query, (CFTypeRef *)&result);
     }
-    if (status != errSecSuccess) {
+    if (status != errSecSuccess || result == nil) {
+        if (result != nil) {
+            CFRelease(result);
+        }
         return nil;
     }
     NSString *accessGroup = [(__bridge NSDictionary *)result objectForKey:(__bridge NSString *)kSecAttrAccessGroup];
-    NSArray *components = [accessGroup componentsSeparatedByString:@"."];
-    NSString *bundleSeedID = [[components objectEnumerator] nextObject];
+    NSString *copyGroup = [accessGroup copy];
     CFRelease(result);
-    return bundleSeedID;
+    return copyGroup;
+}
+
++ (NSString * _Nullable)bundleSeedId {
+    NSString *accessGroup = [self defaultKeychainAccessGroup];
+    if (accessGroup.length == 0) {
+        return nil;
+    }
+    NSArray *components = [accessGroup componentsSeparatedByString:@"."];
+    return [[components objectEnumerator] nextObject];
 }
 
 + (NSString * _Nullable)keychainAccessGroupForBaseAppBundleId:(NSString * _Nonnull)baseAppBundleId {
+    NSString *defaultGroup = [self defaultKeychainAccessGroup];
+    if (defaultGroup.length > 0 && ![defaultGroup hasPrefix:@"group."]) {
+        return defaultGroup;
+    }
     NSString *bundleSeedId = [self bundleSeedId];
     if (bundleSeedId.length == 0 || baseAppBundleId.length == 0) {
         return nil;
     }
     return [bundleSeedId stringByAppendingFormat:@".%@", baseAppBundleId];
+}
+
++ (NSArray<NSString *> * _Nullable)provisionedAppGroupsFromURL:(NSURL * _Nullable)profileUrl {
+    if (profileUrl == nil) {
+        return nil;
+    }
+    NSData *profileData = [NSData dataWithContentsOfURL:profileUrl];
+    if (profileData.length == 0) {
+        return nil;
+    }
+    NSData *startTag = [@"<plist" dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *endTag = [@"</plist>" dataUsingEncoding:NSUTF8StringEncoding];
+    NSRange startRange = [profileData rangeOfData:startTag options:0 range:NSMakeRange(0, profileData.length)];
+    if (startRange.location == NSNotFound) {
+        return nil;
+    }
+    NSRange searchRange = NSMakeRange(startRange.location, profileData.length - startRange.location);
+    NSRange endRange = [profileData rangeOfData:endTag options:0 range:searchRange];
+    if (endRange.location == NSNotFound) {
+        return nil;
+    }
+    NSData *plistData = [profileData subdataWithRange:NSMakeRange(startRange.location, endRange.location + endRange.length - startRange.location)];
+    id plist = [NSPropertyListSerialization propertyListWithData:plistData options:NSPropertyListImmutable format:NULL error:nil];
+    if (![plist isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    id entitlements = ((NSDictionary *)plist)[@"Entitlements"];
+    if (![entitlements isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    id groups = ((NSDictionary *)entitlements)[@"com.apple.security.application-groups"];
+    if (![groups isKindOfClass:[NSArray class]]) {
+        return nil;
+    }
+    NSMutableArray<NSString *> *result = [[NSMutableArray alloc] init];
+    for (id item in (NSArray *)groups) {
+        if ([item isKindOfClass:[NSString class]]) {
+            [result addObject:(NSString *)item];
+        }
+    }
+    return result;
+}
+
++ (NSString * _Nullable)resolvedAppGroupNameForBaseAppBundleId:(NSString * _Nonnull)baseAppBundleId {
+    if (baseAppBundleId.length > 0) {
+        NSString *defaultGroup = [@"group." stringByAppendingString:baseAppBundleId];
+        if ([[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:defaultGroup] != nil) {
+            return defaultGroup;
+        }
+    }
+    NSURL *mainProfileUrl = [[NSBundle mainBundle] URLForResource:@"embedded" withExtension:@"mobileprovision"];
+    NSArray<NSURL *> *profileUrls = mainProfileUrl != nil
+        ? @[mainProfileUrl]
+        : @[];
+    NSURL *bundleUrl = [[NSBundle mainBundle] bundleURL];
+    if (bundleUrl != nil && [[bundleUrl pathExtension] isEqualToString:@"appex"]) {
+        NSURL *hostProfileUrl = [[[bundleUrl URLByDeletingLastPathComponent] URLByDeletingLastPathComponent] URLByAppendingPathComponent:@"embedded.mobileprovision"];
+        if (hostProfileUrl != nil) {
+            profileUrls = [profileUrls arrayByAddingObject:hostProfileUrl];
+        }
+    }
+    for (NSURL *profileUrl in profileUrls) {
+        NSArray<NSString *> *groups = [self provisionedAppGroupsFromURL:profileUrl];
+        for (NSString *candidate in groups) {
+            if (candidate.length > 0 && [candidate rangeOfString:@"*"].location == NSNotFound) {
+                if ([[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:candidate] != nil) {
+                    return candidate;
+                }
+            }
+        }
+    }
+    return nil;
+}
+
++ (NSURL * _Nonnull)appContainerURLForBaseAppBundleId:(NSString * _Nonnull)baseAppBundleId {
+    NSString *groupName = [self resolvedAppGroupNameForBaseAppBundleId:baseAppBundleId];
+    if (groupName != nil) {
+        NSURL *groupUrl = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:groupName];
+        if (groupUrl != nil) {
+            return groupUrl;
+        }
+    }
+    NSArray<NSURL *> *supportUrls = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask];
+    NSURL *baseUrl = supportUrls.firstObject;
+    if (baseUrl == nil) {
+        baseUrl = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"] isDirectory:YES];
+    }
+    NSURL *fallbackUrl = [baseUrl URLByAppendingPathComponent:@"YougramGroup" isDirectory:YES];
+    [[NSFileManager defaultManager] createDirectoryAtURL:fallbackUrl withIntermediateDirectories:YES attributes:nil error:nil];
+    return fallbackUrl;
 }
 
 + (NSData * _Nullable)applicationSecretTag:(bool)isCheckKey {
