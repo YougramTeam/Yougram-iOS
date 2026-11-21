@@ -26,7 +26,7 @@ private final class PasscodeSessionHolder {
     }
 }
 
-private func duressEntries(isSet: Bool, settings: YougramSettings, strings: PresentationStrings) -> [YougramSettingsEntry] {
+private func duressEntries(isSet: Bool, settings: YougramSettings, theme: PresentationTheme, strings: PresentationStrings) -> [YougramSettingsEntry] {
     var b = YougramEntriesBuilder()
     if isSet {
         b.action(strings.Yougram_Duress_Change, tag: "set")
@@ -37,8 +37,8 @@ private func duressEntries(isSet: Bool, settings: YougramSettings, strings: Pres
     b.info(strings.Yougram_Duress_Info)
     b.newSection()
     b.header(strings.Yougram_Duress_Options)
-    b.toggle(strings.Yougram_Duress_DeleteBackup, settings, \.duressDeleteBackup)
-    b.toggle(strings.Yougram_Duress_TerminateSessions, settings, \.duressTerminateSessions)
+    b.toggle(strings.Yougram_Duress_DeleteBackup, settings, \.duressDeleteBackup, icon: yougramIcon("externaldrive", theme: theme))
+    b.toggle(strings.Yougram_Duress_TerminateSessions, settings, \.duressTerminateSessions, icon: yougramIcon("person.crop.circle.badge.xmark", theme: theme))
     b.info(strings.Yougram_Duress_OptionsInfo)
     return b.entries
 }
@@ -174,7 +174,7 @@ func yougramDuressCodeController(context: AccountContext, present: @escaping (Vi
     |> deliverOnMainQueue
     |> map { presentationData, settings, isSet -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.Yougram_Duress_Title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: duressEntries(isSet: isSet, settings: settings, strings: presentationData.strings), style: .blocks, animateChanges: false)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: duressEntries(isSet: isSet, settings: settings, theme: presentationData.theme, strings: presentationData.strings), style: .blocks, animateChanges: false)
         return (controllerState, (listState, arguments))
     }
 

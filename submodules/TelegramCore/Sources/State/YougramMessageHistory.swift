@@ -218,7 +218,7 @@ private func savePeerHistory(transaction: Transaction, peerId: PeerId, history: 
     }
 }
 
-private func yougramSummarizeMedia(_ media: [Media]) -> String? {
+func yougramSummarizeMedia(_ media: [Media]) -> String? {
     for item in media {
         if item is TelegramMediaImage {
             return "[Photo]"
@@ -542,6 +542,312 @@ func yougramRecordEditedMessage(transaction: Transaction, previousMessage: Messa
 
     let now = Int32(Date().timeIntervalSince1970)
     savePeerHistory(transaction: transaction, peerId: peerId, history: history, updatedTimestamp: now)
+}
+
+private func yougramTruncateUTF16(_ text: String, maxUTF16Length: Int) -> String {
+    guard maxUTF16Length > 0 else {
+        return ""
+    }
+    let nsString = text as NSString
+    if nsString.length <= maxUTF16Length {
+        return text
+    }
+    if maxUTF16Length == 1 {
+        return "…"
+    }
+    let limit = maxUTF16Length - 1
+    let boundaryRange = nsString.rangeOfComposedCharacterSequence(at: limit)
+    let cutLength = boundaryRange.location > 0 ? boundaryRange.location : limit
+    return nsString.substring(with: NSRange(location: 0, length: cutLength)) + "…"
+}
+
+private func yougramQuoteSafeEntities(_ entities: [MessageTextEntity], maxLength: Int) -> [MessageTextEntity] {
+    guard maxLength > 0 else {
+        return []
+    }
+    var result: [MessageTextEntity] = []
+    for entity in entities {
+        if entity.range.lowerBound < 0 || entity.range.lowerBound >= maxLength {
+            continue
+        }
+        let upper = min(entity.range.upperBound, maxLength)
+        guard upper > entity.range.lowerBound else {
+            continue
+        }
+        switch entity.type {
+        case .BlockQuote, .Pre:
+            continue
+        default:
+            result.append(MessageTextEntity(range: entity.range.lowerBound ..< upper, type: entity.type))
+        }
+    }
+    return result
+}
+
+private func yougramDeletedQuotePayload(
+    sourceMessage: Message,
+    explicitQuote: EngineMessageReplyQuote?,
+    maxLength: Int
+) -> (text: String, entities: [MessageTextEntity], inlineStickers: [MediaId: Media]) {
+    let rawText: String
+    let rawEntities: [MessageTextEntity]
+
+    if let explicitQuote, !explicitQuote.text.isEmpty {
+        rawText = explicitQuote.text
+        rawEntities = explicitQuote.entities
+    } else if !sourceMessage.text.isEmpty {
+        rawText = sourceMessage.text
+        rawEntities = sourceMessage.textEntitiesAttribute?.entities ?? []
+    } else if let richText = sourceMessage.richText,
+              let flat = richText.instantPage.wholeRichReplyQuote(maxLength: maxLength, media: nil),
+              !flat.text.isEmpty {
+        rawText = flat.text
+        rawEntities = flat.entities
+    } else if let summary = yougramSummarizeMedia(sourceMessage.media) {
+        rawText = summary
+        rawEntities = []
+    } else {
+        rawText = "[Deleted message]"
+        rawEntities = []
+    }
+
+    let quoteText = yougramTruncateUTF16(rawText, maxUTF16Length: maxLength)
+    let quoteLength = (quoteText as NSString).length
+    var entities: [MessageTextEntity] = []
+    if quoteLength > 0 {
+        entities.append(MessageTextEntity(range: 0 ..< quoteLength, type: .BlockQuote(isCollapsed: false)))
+        entities.append(contentsOf: yougramQuoteSafeEntities(rawEntities, maxLength: quoteLength))
+    }
+    return (quoteText, entities, sourceMessage.associatedMedia)
+}
+
+private func yougramDeliveryAttributes(from attributes: [MessageAttribute]) -> [MessageAttribute] {
+    return attributes.filter { attribute in
+        switch attribute {
+        case _ as NotificationInfoMessageAttribute,
+             _ as OutgoingScheduleInfoMessageAttribute,
+             _ as OutgoingQuickReplyMessageAttribute,
+             _ as SendAsMessageAttribute,
+             _ as PaidStarsMessageAttribute,
+             _ as EffectMessageAttribute,
+             _ as AutoremoveTimeoutMessageAttribute:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private func yougramResolvedThreadAndReplyForDeleted(
+    transaction: Transaction,
+    destinationPeerId: PeerId,
+    requestedThreadId: Int64?,
+    deletedMessage: Message,
+    inheritSourceThread: Bool
+) -> (threadId: Int64?, fallbackReplyTo: EngineMessageReplySubject?) {
+    var resolvedThreadId = requestedThreadId
+    if resolvedThreadId == nil && inheritSourceThread && deletedMessage.id.peerId == destinationPeerId {
+        if let threadIdValue = deletedMessage.threadId {
+            if threadIdValue == 1 {
+                if transaction.getPeer(destinationPeerId)?.isForum == true {
+                    resolvedThreadId = 1
+                }
+            } else if Int32(clamping: threadIdValue) != deletedMessage.id.id {
+                resolvedThreadId = threadIdValue
+            }
+        }
+    }
+
+    let isMonoforum = (transaction.getPeer(destinationPeerId) as? TelegramChannel)?.flags.contains(.isMonoforum) == true
+    let fallbackReplyTo: EngineMessageReplySubject?
+    if !isMonoforum,
+       destinationPeerId.namespace != Namespaces.Peer.SecretChat,
+       let tid = resolvedThreadId,
+       tid > 1,
+       Int32(clamping: tid) != deletedMessage.id.id {
+        fallbackReplyTo = EngineMessageReplySubject(
+            messageId: MessageId(peerId: destinationPeerId, namespace: Namespaces.Message.Cloud, id: Int32(clamping: tid)),
+            quote: nil,
+            innerSubject: nil
+        )
+    } else {
+        fallbackReplyTo = nil
+    }
+
+    return (resolvedThreadId, fallbackReplyTo)
+}
+
+func yougramTransformDeletedReplyOrForward(
+    transaction: Transaction,
+    peerId: PeerId,
+    messages: [(Bool, EnqueueMessage)]
+) -> [(Bool, EnqueueMessage)] {
+    var result: [(Bool, EnqueueMessage)] = []
+    var emittedSeparateQuoteReplyIds = Set<MessageId>()
+
+    for (transformedMedia, message) in messages {
+        switch message {
+        case let .forward(sourceId, threadId, _, forwardAttributes, correlationId):
+            if let sourceMessage = transaction.getMessage(sourceId), sourceMessage.isYougramDeleted {
+                let quote = yougramDeletedQuotePayload(sourceMessage: sourceMessage, explicitQuote: nil, maxLength: 4096)
+                let (resolvedThreadId, fallbackReplyTo) = yougramResolvedThreadAndReplyForDeleted(
+                    transaction: transaction,
+                    destinationPeerId: peerId,
+                    requestedThreadId: threadId,
+                    deletedMessage: sourceMessage,
+                    inheritSourceThread: false
+                )
+                var attrs = yougramDeliveryAttributes(from: forwardAttributes)
+                if !quote.entities.isEmpty {
+                    attrs.append(TextEntitiesMessageAttribute(entities: quote.entities))
+                }
+                result.append((
+                    false,
+                    .message(
+                        text: quote.text,
+                        attributes: attrs,
+                        inlineStickers: quote.inlineStickers,
+                        mediaReference: nil,
+                        threadId: resolvedThreadId,
+                        replyToMessageId: fallbackReplyTo,
+                        replyToStoryId: nil,
+                        localGroupingKey: nil,
+                        correlationId: correlationId,
+                        bubbleUpEmojiOrStickersets: []
+                    )
+                ))
+            } else {
+                result.append((transformedMedia, message))
+            }
+
+        case let .message(text, requestedAttributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets):
+            guard let replySubject = replyToMessageId,
+                  let replyMessage = transaction.getMessage(replySubject.messageId),
+                  replyMessage.isYougramDeleted else {
+                result.append((transformedMedia, message))
+                continue
+            }
+
+            let (resolvedThreadId, fallbackReplyTo) = yougramResolvedThreadAndReplyForDeleted(
+                transaction: transaction,
+                destinationPeerId: peerId,
+                requestedThreadId: threadId,
+                deletedMessage: replyMessage,
+                inheritSourceThread: true
+            )
+
+            let hasRichText = requestedAttributes.contains(where: { $0 is RichTextMessageAttribute })
+            let isAlbum = localGroupingKey != nil
+            let isCaptionableMedia: Bool
+            if let media = mediaReference?.media {
+                if media is TelegramMediaImage {
+                    isCaptionableMedia = true
+                } else if let file = media as? TelegramMediaFile {
+                    isCaptionableMedia = !file.isSticker && !file.isVoice && !file.isInstantVideo
+                } else {
+                    isCaptionableMedia = false
+                }
+            } else {
+                isCaptionableMedia = false
+            }
+
+            let canMergeIntoSingleMessage = !hasRichText && !isAlbum && (mediaReference == nil || isCaptionableMedia)
+            let maxTotalLength = mediaReference == nil ? 4096 : 1024
+            let userLength = (text as NSString).length
+            let availableQuoteLength = userLength == 0 ? maxTotalLength : (maxTotalLength - userLength - 1)
+
+            if canMergeIntoSingleMessage && availableQuoteLength >= 32 {
+                let quote = yougramDeletedQuotePayload(
+                    sourceMessage: replyMessage,
+                    explicitQuote: replySubject.quote,
+                    maxLength: availableQuoteLength
+                )
+                let quoteLength = (quote.text as NSString).length
+                let combinedText = userLength == 0 ? quote.text : (quote.text + "\n" + text)
+
+                var shiftedUserEntities: [MessageTextEntity] = []
+                for attribute in requestedAttributes {
+                    if let entitiesAttr = attribute as? TextEntitiesMessageAttribute, userLength > 0 {
+                        let offsetShift = quoteLength + 1
+                        shiftedUserEntities = entitiesAttr.entities.map { entity in
+                            MessageTextEntity(
+                                range: (entity.range.lowerBound + offsetShift) ..< (entity.range.upperBound + offsetShift),
+                                type: entity.type
+                            )
+                        }
+                        break
+                    }
+                }
+
+                var updatedAttributes = requestedAttributes.filter { !($0 is TextEntitiesMessageAttribute) }
+                let combinedEntities = quote.entities + shiftedUserEntities
+                if !combinedEntities.isEmpty {
+                    updatedAttributes.append(TextEntitiesMessageAttribute(entities: combinedEntities))
+                }
+                let mergedStickers = quote.inlineStickers.merging(inlineStickers, uniquingKeysWith: { _, rhs in rhs })
+
+                result.append((
+                    transformedMedia,
+                    .message(
+                        text: combinedText,
+                        attributes: updatedAttributes,
+                        inlineStickers: mergedStickers,
+                        mediaReference: mediaReference,
+                        threadId: resolvedThreadId,
+                        replyToMessageId: fallbackReplyTo,
+                        replyToStoryId: replyToStoryId,
+                        localGroupingKey: localGroupingKey,
+                        correlationId: correlationId,
+                        bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets
+                    )
+                ))
+            } else {
+                if emittedSeparateQuoteReplyIds.insert(replySubject.messageId).inserted {
+                    let quote = yougramDeletedQuotePayload(
+                        sourceMessage: replyMessage,
+                        explicitQuote: replySubject.quote,
+                        maxLength: 4096
+                    )
+                    var quoteAttrs = yougramDeliveryAttributes(from: requestedAttributes)
+                    if !quote.entities.isEmpty {
+                        quoteAttrs.append(TextEntitiesMessageAttribute(entities: quote.entities))
+                    }
+                    result.append((
+                        false,
+                        .message(
+                            text: quote.text,
+                            attributes: quoteAttrs,
+                            inlineStickers: quote.inlineStickers,
+                            mediaReference: nil,
+                            threadId: resolvedThreadId,
+                            replyToMessageId: fallbackReplyTo,
+                            replyToStoryId: nil,
+                            localGroupingKey: nil,
+                            correlationId: nil,
+                            bubbleUpEmojiOrStickersets: []
+                        )
+                    ))
+                }
+                result.append((
+                    transformedMedia,
+                    .message(
+                        text: text,
+                        attributes: requestedAttributes,
+                        inlineStickers: inlineStickers,
+                        mediaReference: mediaReference,
+                        threadId: resolvedThreadId,
+                        replyToMessageId: fallbackReplyTo,
+                        replyToStoryId: replyToStoryId,
+                        localGroupingKey: localGroupingKey,
+                        correlationId: correlationId,
+                        bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets
+                    )
+                ))
+            }
+        }
+    }
+
+    return result
 }
 
 private func buildHistoryStats(from entry: PreferencesEntry?) -> YougramHistoryStats {

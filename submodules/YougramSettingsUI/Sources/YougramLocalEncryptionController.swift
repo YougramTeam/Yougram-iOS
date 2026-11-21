@@ -25,22 +25,22 @@ private final class YougramSettingsPasscodeHolder {
 private enum EncryptionEntry: ItemListNodeEntry {
     case info(id: Int32, section: Int32, text: String)
     case action(id: Int32, section: Int32, title: String, destructive: Bool, tag: String)
-    case disclosure(id: Int32, section: Int32, title: String, label: String, tag: String)
-    case toggle(id: Int32, section: Int32, title: String, value: Bool, tag: String)
+    case disclosure(id: Int32, section: Int32, icon: UIImage?, title: String, label: String, tag: String)
+    case toggle(id: Int32, section: Int32, icon: UIImage?, title: String, value: Bool, tag: String)
     case header(id: Int32, section: Int32, text: String)
 
     var section: ItemListSectionId {
         switch self {
-        case let .info(_, s, _), let .action(_, s, _, _, _), let .disclosure(_, s, _, _, _),
-             let .toggle(_, s, _, _, _), let .header(_, s, _):
+        case let .info(_, s, _), let .action(_, s, _, _, _), let .disclosure(_, s, _, _, _, _),
+             let .toggle(_, s, _, _, _, _), let .header(_, s, _):
             return s
         }
     }
 
     var stableId: Int32 {
         switch self {
-        case let .info(id, _, _), let .action(id, _, _, _, _), let .disclosure(id, _, _, _, _),
-             let .toggle(id, _, _, _, _), let .header(id, _, _):
+        case let .info(id, _, _), let .action(id, _, _, _, _), let .disclosure(id, _, _, _, _, _),
+             let .toggle(id, _, _, _, _, _), let .header(id, _, _):
             return id
         }
     }
@@ -58,12 +58,12 @@ private enum EncryptionEntry: ItemListNodeEntry {
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: destructive ? .destructive : .generic, alignment: .natural, sectionId: section, style: .blocks, action: {
                 args.performAction(tag)
             })
-        case let .disclosure(_, section, title, label, tag):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: section, style: .blocks, action: {
+        case let .disclosure(_, section, icon, title, label, tag):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: label, sectionId: section, style: .blocks, action: {
                 args.performAction(tag)
             })
-        case let .toggle(_, section, title, value, tag):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: section, style: .blocks, updated: { newValue in
+        case let .toggle(_, section, icon, title, value, tag):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, value: value, sectionId: section, style: .blocks, updated: { newValue in
                 args.toggle(tag, newValue)
             })
         case let .header(_, section, text):
@@ -118,7 +118,7 @@ private func autoLockLabel(_ timeout: Int32?, strings: PresentationStrings) -> S
     }
 }
 
-private func buildEncryptionEntries(manifest: YougramVaultManifest?, strings: PresentationStrings) -> [EncryptionEntry] {
+private func buildEncryptionEntries(manifest: YougramVaultManifest?, theme: PresentationTheme, strings: PresentationStrings) -> [EncryptionEntry] {
     var entries: [EncryptionEntry] = []
     var nextId: Int32 = 1
     var section: Int32 = 0
@@ -137,14 +137,14 @@ private func buildEncryptionEntries(manifest: YougramVaultManifest?, strings: Pr
     entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_StatusInfo))
 
     section += 1
-    entries.append(.disclosure(id: next(), section: section, title: strings.Yougram_Encryption_UnlockMethod, label: unlockMethodLabel(manifest.unlockMode, strings: strings), tag: "unlockMethod"))
+    entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("key", theme: theme), title: strings.Yougram_Encryption_UnlockMethod, label: unlockMethodLabel(manifest.unlockMode, strings: strings), tag: "unlockMethod"))
     if case .dedicated = manifest.unlockMode {
         entries.append(.action(id: next(), section: section, title: strings.Yougram_Encryption_ChangeSecret, destructive: false, tag: "changeSecret"))
-        entries.append(.toggle(id: next(), section: section, title: strings.Yougram_Encryption_FaceId, value: manifest.biometricsEnabled, tag: "biometrics"))
-        entries.append(.disclosure(id: next(), section: section, title: strings.Yougram_Encryption_AutoLock, label: autoLockLabel(manifest.autoLockTimeout, strings: strings), tag: "autoLock"))
-        entries.append(.toggle(id: next(), section: section, title: strings.Yougram_Encryption_ScrambleKeypad, value: manifest.scrambledKeypad, tag: "scrambleKeypad"))
+        entries.append(.toggle(id: next(), section: section, icon: yougramIcon("faceid", theme: theme), title: strings.Yougram_Encryption_FaceId, value: manifest.biometricsEnabled, tag: "biometrics"))
+        entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("timer", theme: theme), title: strings.Yougram_Encryption_AutoLock, label: autoLockLabel(manifest.autoLockTimeout, strings: strings), tag: "autoLock"))
+        entries.append(.toggle(id: next(), section: section, icon: yougramIcon("circle.grid.3x3", theme: theme), title: strings.Yougram_Encryption_ScrambleKeypad, value: manifest.scrambledKeypad, tag: "scrambleKeypad"))
         let duressLabel = (manifest.duressHash != nil) ? strings.Yougram_Encryption_DuressSet : strings.Yougram_Encryption_DuressOff
-        entries.append(.disclosure(id: next(), section: section, title: strings.Yougram_Encryption_DedicatedDuress, label: duressLabel, tag: "duress"))
+        entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("flame", theme: theme, destructive: true), title: strings.Yougram_Encryption_DedicatedDuress, label: duressLabel, tag: "duress"))
         entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_DuressInfo))
 
         section += 1
@@ -153,7 +153,7 @@ private func buildEncryptionEntries(manifest: YougramVaultManifest?, strings: Pr
 
     section += 1
     entries.append(.header(id: next(), section: section, text: strings.Yougram_Encryption_BackgroundExtensionsSection))
-    entries.append(.toggle(id: next(), section: section, title: strings.Yougram_Encryption_AllowBackgroundExtensions, value: manifest.allowBackgroundExtensions, tag: "allowExtensions"))
+    entries.append(.toggle(id: next(), section: section, icon: yougramIcon("bell.badge", theme: theme), title: strings.Yougram_Encryption_AllowBackgroundExtensions, value: manifest.allowBackgroundExtensions, tag: "allowExtensions"))
     entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_ExtensionsInfo))
 
     section += 1
@@ -733,7 +733,7 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
         )
         let listState = ItemListNodeState(
             presentationData: itemPresentation,
-            entries: buildEncryptionEntries(manifest: manifest, strings: presentationData.strings),
+            entries: buildEncryptionEntries(manifest: manifest, theme: presentationData.theme, strings: presentationData.strings),
             style: .blocks,
             animateChanges: true
         )

@@ -40,16 +40,16 @@ private func copyTextWithToast(context: AccountContext, text: String, present: (
 private enum HistoryEntry: ItemListNodeEntry {
     case header(id: Int32, section: Int32, text: String)
     case info(id: Int32, section: Int32, text: String)
-    case toggle(id: Int32, section: Int32, title: String, value: Bool, tag: String)
-    case disclosure(id: Int32, section: Int32, title: String, titleBold: Bool, label: String, arrow: Bool, actionTag: String)
+    case toggle(id: Int32, section: Int32, icon: UIImage?, title: String, value: Bool, tag: String)
+    case disclosure(id: Int32, section: Int32, icon: UIImage?, title: String, titleBold: Bool, label: String, arrow: Bool, actionTag: String)
     case action(id: Int32, section: Int32, title: String, destructive: Bool, tag: String)
 
     var section: ItemListSectionId {
         switch self {
         case let .header(_, s, _),
              let .info(_, s, _),
-             let .toggle(_, s, _, _, _),
-             let .disclosure(_, s, _, _, _, _, _),
+             let .toggle(_, s, _, _, _, _),
+             let .disclosure(_, s, _, _, _, _, _, _),
              let .action(_, s, _, _, _):
             return s
         }
@@ -59,8 +59,8 @@ private enum HistoryEntry: ItemListNodeEntry {
         switch self {
         case let .header(id, _, _),
              let .info(id, _, _),
-             let .toggle(id, _, _, _, _),
-             let .disclosure(id, _, _, _, _, _, _),
+             let .toggle(id, _, _, _, _, _),
+             let .disclosure(id, _, _, _, _, _, _, _),
              let .action(id, _, _, _, _):
             return id
         }
@@ -77,14 +77,15 @@ private enum HistoryEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: section)
         case let .info(_, section, text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: section)
-        case let .toggle(_, section, title, value, tag):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: section, style: .blocks, updated: { newValue in
+        case let .toggle(_, section, icon, title, value, tag):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, value: value, sectionId: section, style: .blocks, updated: { newValue in
                 args.toggle(tag, newValue)
             })
-        case let .disclosure(_, section, title, titleBold, label, arrow, actionTag):
+        case let .disclosure(_, section, icon, title, titleBold, label, arrow, actionTag):
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
+                icon: icon,
                 title: title,
                 titleFont: titleBold ? .bold : .regular,
                 label: label,
@@ -185,8 +186,9 @@ public func yougramLocalHistoryController(context: AccountContext) -> ViewContro
             return nextId
         }
 
-        entries.append(.toggle(id: id(), section: 0, title: strings.Yougram_History_SaveDeleted, value: settings.saveDeletedMessages, tag: "saveDeleted"))
-        entries.append(.toggle(id: id(), section: 0, title: strings.Yougram_History_SaveEdits, value: settings.saveEditHistory, tag: "saveEdits"))
+        let theme = presentationData.theme
+        entries.append(.toggle(id: id(), section: 0, icon: yougramIcon("trash", theme: theme), title: strings.Yougram_History_SaveDeleted, value: settings.saveDeletedMessages, tag: "saveDeleted"))
+        entries.append(.toggle(id: id(), section: 0, icon: yougramIcon("pencil", theme: theme), title: strings.Yougram_History_SaveEdits, value: settings.saveEditHistory, tag: "saveEdits"))
         entries.append(.info(id: id(), section: 0, text: strings.Yougram_History_Info))
 
         entries.append(.header(id: id(), section: 1, text: strings.Yougram_History_SavedChats))
@@ -198,6 +200,7 @@ public func yougramLocalHistoryController(context: AccountContext) -> ViewContro
                 entries.append(.disclosure(
                     id: id(),
                     section: 1,
+                    icon: yougramIcon("bubble.left", theme: theme),
                     title: entry.peerTitle,
                     titleBold: false,
                     label: summary,
@@ -310,6 +313,7 @@ public func yougramDeletedMessagesController(
                 entries.append(.disclosure(
                     id: id(),
                     section: section,
+                    icon: nil,
                     title: title,
                     titleBold: true,
                     label: body,
@@ -331,6 +335,7 @@ public func yougramDeletedMessagesController(
                 entries.append(.disclosure(
                     id: id(),
                     section: section,
+                    icon: nil,
                     title: title,
                     titleBold: false,
                     label: preview,
@@ -412,6 +417,7 @@ public func yougramEditHistoryController(
             entries.append(.disclosure(
                 id: id(),
                 section: section,
+                icon: nil,
                 title: strings.Yougram_History_CurrentVersion,
                 titleBold: true,
                 label: currentText,
@@ -432,6 +438,7 @@ public func yougramEditHistoryController(
                 entries.append(.disclosure(
                     id: id(),
                     section: section,
+                    icon: nil,
                     title: formatHistoryTimestamp(version.timestamp),
                     titleBold: true,
                     label: version.text,

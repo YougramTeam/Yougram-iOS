@@ -17,14 +17,14 @@ private struct BackupScreenState: Equatable {
     var isWorking: Bool
 }
 
-private func backupEntries(state: BackupScreenState, strings: PresentationStrings) -> [YougramSettingsEntry] {
+private func backupEntries(state: BackupScreenState, theme: PresentationTheme, strings: PresentationStrings) -> [YougramSettingsEntry] {
     var b = YougramEntriesBuilder()
     b.action(strings.Yougram_Backup_BackUpNow, tag: "backup")
     b.action(strings.Yougram_Backup_Restore, tag: "restore")
     b.info(strings.Yougram_Backup_Info)
     b.newSection()
     // Where the keychain items live, not app behaviour, so not a YougramSettings field.
-    b.taggedToggle(strings.Yougram_Backup_ICloud, value: state.syncsWithICloud, tag: "iCloud")
+    b.taggedToggle(strings.Yougram_Backup_ICloud, value: state.syncsWithICloud, icon: yougramIcon("icloud", theme: theme), tag: "iCloud")
     b.info(strings.Yougram_Backup_ICloudInfo)
     b.newSection()
     b.header(strings.Yougram_Backup_Saved)
@@ -184,7 +184,7 @@ func yougramAccountsBackupController(context: AccountContext) -> ViewController 
     |> deliverOnMainQueue
     |> map { presentationData, state -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.Yougram_Backup_Title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: backupEntries(state: state, strings: presentationData.strings), style: .blocks)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: backupEntries(state: state, theme: presentationData.theme, strings: presentationData.strings), style: .blocks)
         return (controllerState, (listState, arguments))
     }
     |> afterDisposed {

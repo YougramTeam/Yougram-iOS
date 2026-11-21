@@ -940,6 +940,9 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
         })
     }
     
+    // Yougram: replying to a preserved deleted message sends a quote + reply; forwarding sends only the quote.
+    let messages = yougramTransformDeletedReplyOrForward(transaction: transaction, peerId: peerId, messages: messages)
+
     var forwardedMessageIds = Set<MessageId>()
     for (_, message) in messages {
         if case let .forward(sourceId, _, _, _, _) = message {
