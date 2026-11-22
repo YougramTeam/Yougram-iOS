@@ -887,6 +887,10 @@ extension PeerInfoScreenNode {
                             }
                         })))
                     }
+                    items.append(strongSelf.exportChatContextMenuItem(
+                        peerId: chatPeer?.id ?? strongSelf.peerId,
+                        title: EnginePeer(user).displayTitle(strings: strongSelf.presentationData.strings, displayOrder: strongSelf.presentationData.nameDisplayOrder)
+                    ))
                     
                     if strongSelf.peerId.namespace == Namespaces.Peer.CloudUser && user.botInfo == nil && !user.flags.contains(.isSupport) {
                         if data.isContact {
@@ -1095,6 +1099,10 @@ extension PeerInfoScreenNode {
                             }
                         })))
                     }
+                    items.append(strongSelf.exportChatContextMenuItem(
+                        peerId: strongSelf.peerId,
+                        title: EnginePeer(channel).displayTitle(strings: strongSelf.presentationData.strings, displayOrder: strongSelf.presentationData.nameDisplayOrder)
+                    ))
                     
                     switch channel.info {
                     case .broadcast:
@@ -1254,6 +1262,10 @@ extension PeerInfoScreenNode {
                             }
                         })))
                     }
+                    items.append(strongSelf.exportChatContextMenuItem(
+                        peerId: strongSelf.peerId,
+                        title: EnginePeer(group).displayTitle(strings: strongSelf.presentationData.strings, displayOrder: strongSelf.presentationData.nameDisplayOrder)
+                    ))
                     
                     if case .Member = group.membership, !headerButtons.contains(.leave) {
                         if !items.isEmpty {
@@ -1332,6 +1344,26 @@ extension PeerInfoScreenNode {
             generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Report"), color: theme.contextMenu.primaryColor)
         }, action: { [weak self] c, _ in
             self?.openReport(type: .default, contextController: c)
+        }))
+    }
+
+    private func exportChatContextMenuItem(peerId: EnginePeer.Id, title: String) -> ContextMenuItem {
+        return .action(ContextMenuActionItem(text: "Export Chat History", icon: { theme in
+            if let image = UIImage(systemName: "square.and.arrow.up", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18.0, weight: .regular)) {
+                return image.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal)
+            }
+            return nil
+        }, action: { [weak self] _, f in
+            f(.dismissWithoutContent)
+            guard let self, let navigationController = self.controller?.navigationController as? NavigationController else {
+                return
+            }
+            let controller = yougramChatExportController(
+                context: self.context,
+                peerId: peerId,
+                peerTitle: title
+            )
+            navigationController.pushViewController(controller)
         }))
     }
 }

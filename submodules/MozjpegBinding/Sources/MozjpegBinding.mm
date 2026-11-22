@@ -17,10 +17,95 @@
 #endif
 
 #include <limits.h>
+#include <stdint.h>
 #include <string.h>
 #include <sstream>
 #include <string>
 #include <vector>
+
+static uint8_t * _Nullable createRGB888BufferFromImage(UIImage * _Nonnull sourceImage, int width, int height, size_t * _Nonnull outBytesPerRow) {
+    if (sourceImage == nil || width <= 0 || height <= 0) {
+        return NULL;
+    }
+
+    CGImageRef cgImage = sourceImage.CGImage;
+    if (cgImage == NULL && sourceImage.CIImage == nil) {
+        return NULL;
+    }
+
+    size_t widthSz = (size_t)width;
+    size_t heightSz = (size_t)height;
+    if (widthSz > (SIZE_MAX - 31) / 4) {
+        return NULL;
+    }
+    size_t targetBytesPerRow = ((4 * widthSz) + 31) & (~(size_t)31);
+    if (heightSz > SIZE_MAX / targetBytesPerRow) {
+        return NULL;
+    }
+
+    uint8_t *targetMemory = (uint8_t *)calloc(heightSz, targetBytesPerRow);
+    if (targetMemory == NULL) {
+        return NULL;
+    }
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    if (colorSpace == NULL) {
+        free(targetMemory);
+        return NULL;
+    }
+    CGBitmapInfo bitmapInfo = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host;
+    CGContextRef targetContext = CGBitmapContextCreate(targetMemory, widthSz, heightSz, 8, targetBytesPerRow, colorSpace, bitmapInfo);
+    CGColorSpaceRelease(colorSpace);
+    if (targetContext == NULL) {
+        free(targetMemory);
+        return NULL;
+    }
+
+    if (cgImage != NULL) {
+        CGContextDrawImage(targetContext, CGRectMake(0, 0, width, height), cgImage);
+    } else {
+        CGContextSaveGState(targetContext);
+        CGContextTranslateCTM(targetContext, 0, height);
+        CGContextScaleCTM(targetContext, 1.0, -1.0);
+        UIGraphicsPushContext(targetContext);
+        [sourceImage drawInRect:CGRectMake(0, 0, width, height)];
+        UIGraphicsPopContext();
+        CGContextRestoreGState(targetContext);
+    }
+
+    size_t bufferBytesPerRow = ((3 * widthSz) + 31) & (~(size_t)31);
+    if (heightSz > SIZE_MAX / bufferBytesPerRow) {
+        CGContextRelease(targetContext);
+        free(targetMemory);
+        return NULL;
+    }
+    uint8_t *buffer = (uint8_t *)malloc(bufferBytesPerRow * heightSz);
+    if (buffer == NULL) {
+        CGContextRelease(targetContext);
+        free(targetMemory);
+        return NULL;
+    }
+
+    for (size_t y = 0; y < heightSz; y++) {
+        for (size_t x = 0; x < widthSz; x++) {
+            uint32_t *color = ((uint32_t *)&targetMemory[y * targetBytesPerRow + x * 4]);
+
+            uint8_t r = (uint8_t)((*color >> 16) & 0xff);
+            uint8_t g = (uint8_t)((*color >> 8) & 0xff);
+            uint8_t b = (uint8_t)(*color & 0xff);
+
+            buffer[y * bufferBytesPerRow + x * 3 + 0] = r;
+            buffer[y * bufferBytesPerRow + x * 3 + 1] = g;
+            buffer[y * bufferBytesPerRow + x * 3 + 2] = b;
+        }
+    }
+
+    CGContextRelease(targetContext);
+    free(targetMemory);
+
+    *outBytesPerRow = bufferBytesPerRow;
+    return buffer;
+}
 
 static inline float JXLGetDistance(int32_t quality) {
     if (quality == 0) {
@@ -36,44 +121,13 @@ NSData * _Nullable compressJPEGXLData(UIImage * _Nonnull sourceImage, int qualit
     #ifdef USE_JPEGXL
     int width = (int)(sourceImage.size.width * sourceImage.scale);
     int height = (int)(sourceImage.size.height * sourceImage.scale);
-    
-    int targetBytesPerRow = ((4 * (int)width) + 31) & (~31);
-    uint8_t *targetMemory = (uint8_t *)malloc((int)(targetBytesPerRow * height));
-    
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGBitmapInfo bitmapInfo = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host;
-    
-    CGContextRef targetContext = CGBitmapContextCreate(targetMemory, width, height, 8, targetBytesPerRow, colorSpace, bitmapInfo);
-    
-    UIGraphicsPushContext(targetContext);
-    
-    CGColorSpaceRelease(colorSpace);
-    
-    CGContextDrawImage(targetContext, CGRectMake(0, 0, width, height), sourceImage.CGImage);
-    
-    UIGraphicsPopContext();
-    
-    int bufferBytesPerRow = ((3 * (int)width) + 31) & (~31);
-    int bufferSize = bufferBytesPerRow * height;
-    uint8_t *buffer = (uint8_t *)malloc(bufferBytesPerRow * height);
-    
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint32_t *color = ((uint32_t *)&targetMemory[y * targetBytesPerRow + x * 4]);
-            
-            uint32_t r = ((*color >> 16) & 0xff);
-            uint32_t g = ((*color >> 8) & 0xff);
-            uint32_t b = (*color & 0xff);
-            
-            buffer[y * bufferBytesPerRow + x * 3 + 0] = r;
-            buffer[y * bufferBytesPerRow + x * 3 + 1] = g;
-            buffer[y * bufferBytesPerRow + x * 3 + 2] = b;
-        }
+
+    size_t bufferBytesPerRow = 0;
+    uint8_t *buffer = createRGB888BufferFromImage(sourceImage, width, height, &bufferBytesPerRow);
+    if (buffer == NULL) {
+        return nil;
     }
-    
-    CGContextRelease(targetContext);
-    
-    free(targetMemory);
+    size_t bufferSize = bufferBytesPerRow * (size_t)height;
     
     auto enc = JxlEncoderMake(nullptr);
     
@@ -341,47 +395,48 @@ NSArray<NSNumber *> * _Nonnull extractJPEGDataScans(NSData * _Nonnull data) {
     return result;
 }
 
+static NSMutableData * _Nullable buildMiniThumbnailData(uint8_t * _Nullable outBuffer, unsigned long outSize, int width, int height) {
+    NSData *headerPattern = getHeaderPattern();
+    NSData *footerPattern = getFooterPattern();
+    if (outBuffer == NULL || headerPattern == nil || footerPattern == nil) {
+        return nil;
+    }
+    if (outSize <= 166 || outSize < headerPattern.length + footerPattern.length) {
+        return nil;
+    }
+
+    NSMutableData *serializedData = nil;
+    if (outBuffer[164] == (uint8_t)height && outBuffer[166] == (uint8_t)width) {
+        outBuffer[164] = 0;
+        outBuffer[166] = 0;
+
+        if (memcmp(headerPattern.bytes, outBuffer, headerPattern.length) == 0) {
+            if (memcmp(footerPattern.bytes, outBuffer + outSize - footerPattern.length, footerPattern.length) == 0) {
+                serializedData = [[NSMutableData alloc] init];
+                uint8_t version = 1;
+                [serializedData appendBytes:&version length:1];
+                uint8_t outWidth = (uint8_t)width;
+                uint8_t outHeight = (uint8_t)height;
+                [serializedData appendBytes:&outHeight length:1];
+                [serializedData appendBytes:&outWidth length:1];
+                unsigned long contentSize = outSize - headerPattern.length - footerPattern.length;
+                [serializedData appendBytes:outBuffer + headerPattern.length length:contentSize];
+            }
+        }
+    }
+    return serializedData;
+}
+
 #if USE_JPEGLI
 NSData * _Nullable compressJPEGData(UIImage * _Nonnull sourceImage) {
     int width = (int)(sourceImage.size.width * sourceImage.scale);
     int height = (int)(sourceImage.size.height * sourceImage.scale);
-    
-    int targetBytesPerRow = ((4 * (int)width) + 31) & (~31);
-    uint8_t *targetMemory = malloc((int)(targetBytesPerRow * height));
-    
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGBitmapInfo bitmapInfo = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host;
-    
-    CGContextRef targetContext = CGBitmapContextCreate(targetMemory, width, height, 8, targetBytesPerRow, colorSpace, bitmapInfo);
-    
-    UIGraphicsPushContext(targetContext);
-    
-    CGColorSpaceRelease(colorSpace);
-    
-    CGContextDrawImage(targetContext, CGRectMake(0, 0, width, height), sourceImage.CGImage);
-    
-    UIGraphicsPopContext();
-    
-    int bufferBytesPerRow = ((3 * (int)width) + 31) & (~31);
-    uint8_t *buffer = malloc(bufferBytesPerRow * height);
-    
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint32_t *color = ((uint32_t *)&targetMemory[y * targetBytesPerRow + x * 4]);
-            
-            uint32_t r = ((*color >> 16) & 0xff);
-            uint32_t g = ((*color >> 8) & 0xff);
-            uint32_t b = (*color & 0xff);
-            
-            buffer[y * bufferBytesPerRow + x * 3 + 0] = r;
-            buffer[y * bufferBytesPerRow + x * 3 + 1] = g;
-            buffer[y * bufferBytesPerRow + x * 3 + 2] = b;
-        }
+
+    size_t bufferBytesPerRow = 0;
+    uint8_t *buffer = createRGB888BufferFromImage(sourceImage, width, height, &bufferBytesPerRow);
+    if (buffer == NULL) {
+        return nil;
     }
-    
-    CGContextRelease(targetContext);
-    
-    free(targetMemory);
     
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
@@ -407,13 +462,13 @@ NSData * _Nullable compressJPEGData(UIImage * _Nonnull sourceImage) {
     
     JSAMPROW rowPointer[1];
     while (cinfo.next_scanline < cinfo.image_height) {
-        rowPointer[0] = (JSAMPROW)(buffer + cinfo.next_scanline * bufferBytesPerRow);
+        rowPointer[0] = (JSAMPROW)(buffer + (size_t)cinfo.next_scanline * bufferBytesPerRow);
         jpeg_write_scanlines(&cinfo, rowPointer, 1);
     }
     
     jpeg_finish_compress(&cinfo);
     
-    NSData *result = [[NSData alloc] initWithBytes:outBuffer length:outSize];
+    NSData *result = (outBuffer != NULL && outSize > 0) ? [[NSData alloc] initWithBytes:outBuffer length:outSize] : nil;
     
     jpeg_destroy_compress(&cinfo);
     
@@ -423,50 +478,20 @@ NSData * _Nullable compressJPEGData(UIImage * _Nonnull sourceImage) {
 }
 #else
 NSData * _Nullable compressJPEGData(UIImage * _Nonnull sourceImage, NSString * _Nonnull tempFilePath) {
-    FILE *outfile = fopen([tempFilePath UTF8String], "w");
-    if (!outfile) {
-        return nil;
-    }
-    
     int width = (int)(sourceImage.size.width * sourceImage.scale);
     int height = (int)(sourceImage.size.height * sourceImage.scale);
-    
-    int targetBytesPerRow = ((4 * (int)width) + 31) & (~31);
-    uint8_t *targetMemory = (uint8_t *)malloc((int)(targetBytesPerRow * height));
-    
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGBitmapInfo bitmapInfo = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host;
-    
-    CGContextRef targetContext = CGBitmapContextCreate(targetMemory, width, height, 8, targetBytesPerRow, colorSpace, bitmapInfo);
-    
-    UIGraphicsPushContext(targetContext);
-    
-    CGColorSpaceRelease(colorSpace);
-    
-    CGContextDrawImage(targetContext, CGRectMake(0, 0, width, height), sourceImage.CGImage);
-    
-    UIGraphicsPopContext();
-    
-    int bufferBytesPerRow = ((3 * (int)width) + 31) & (~31);
-    uint8_t *buffer = (uint8_t *)malloc(bufferBytesPerRow * height);
-    
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint32_t *color = ((uint32_t *)&targetMemory[y * targetBytesPerRow + x * 4]);
-            
-            uint32_t r = ((*color >> 16) & 0xff);
-            uint32_t g = ((*color >> 8) & 0xff);
-            uint32_t b = (*color & 0xff);
-            
-            buffer[y * bufferBytesPerRow + x * 3 + 0] = r;
-            buffer[y * bufferBytesPerRow + x * 3 + 1] = g;
-            buffer[y * bufferBytesPerRow + x * 3 + 2] = b;
-        }
+
+    size_t bufferBytesPerRow = 0;
+    uint8_t *buffer = createRGB888BufferFromImage(sourceImage, width, height, &bufferBytesPerRow);
+    if (buffer == NULL) {
+        return nil;
     }
-    
-    CGContextRelease(targetContext);
-    
-    free(targetMemory);
+
+    FILE *outfile = fopen([tempFilePath UTF8String], "w");
+    if (!outfile) {
+        free(buffer);
+        return nil;
+    }
     
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
@@ -490,7 +515,7 @@ NSData * _Nullable compressJPEGData(UIImage * _Nonnull sourceImage, NSString * _
     
     JSAMPROW rowPointer[1];
     while (cinfo.next_scanline < cinfo.image_height) {
-        rowPointer[0] = (JSAMPROW)(buffer + cinfo.next_scanline * bufferBytesPerRow);
+        rowPointer[0] = (JSAMPROW)(buffer + (size_t)cinfo.next_scanline * bufferBytesPerRow);
         jpeg_write_scanlines(&cinfo, rowPointer, 1);
     }
     
@@ -521,43 +546,12 @@ NSData * _Nullable compressMiniThumbnail(UIImage * _Nonnull image, CGSize size) 
     
     int width = (int)fittedSize.width;
     int height = (int)fittedSize.height;
-    
-    int targetBytesPerRow = ((4 * (int)width) + 31) & (~31);
-    uint8_t *targetMemory = malloc((int)(targetBytesPerRow * height));
-    
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGBitmapInfo bitmapInfo = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host;
-    
-    CGContextRef targetContext = CGBitmapContextCreate(targetMemory, width, height, 8, targetBytesPerRow, colorSpace, bitmapInfo);
-    
-    UIGraphicsPushContext(targetContext);
-    
-    CGColorSpaceRelease(colorSpace);
-    
-    CGContextDrawImage(targetContext, CGRectMake(0, 0, width, height), image.CGImage);
-    
-    UIGraphicsPopContext();
-    
-    int bufferBytesPerRow = ((3 * (int)width) + 31) & (~31);
-    uint8_t *buffer = malloc(bufferBytesPerRow * height);
-    
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint32_t *color = ((uint32_t *)&targetMemory[y * targetBytesPerRow + x * 4]);
-            
-            uint32_t r = ((*color >> 16) & 0xff);
-            uint32_t g = ((*color >> 8) & 0xff);
-            uint32_t b = (*color & 0xff);
-            
-            buffer[y * bufferBytesPerRow + x * 3 + 0] = r;
-            buffer[y * bufferBytesPerRow + x * 3 + 1] = g;
-            buffer[y * bufferBytesPerRow + x * 3 + 2] = b;
-        }
+
+    size_t bufferBytesPerRow = 0;
+    uint8_t *buffer = createRGB888BufferFromImage(image, width, height, &bufferBytesPerRow);
+    if (buffer == NULL) {
+        return nil;
     }
-    
-    CGContextRelease(targetContext);
-    
-    free(targetMemory);
     
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
@@ -582,34 +576,13 @@ NSData * _Nullable compressMiniThumbnail(UIImage * _Nonnull image, CGSize size) 
     
     JSAMPROW rowPointer[1];
     while (cinfo.next_scanline < cinfo.image_height) {
-        rowPointer[0] = (JSAMPROW)(buffer + cinfo.next_scanline * bufferBytesPerRow);
+        rowPointer[0] = (JSAMPROW)(buffer + (size_t)cinfo.next_scanline * bufferBytesPerRow);
         jpeg_write_scanlines(&cinfo, rowPointer, 1);
     }
     
     jpeg_finish_compress(&cinfo);
     
-    NSMutableData *serializedData = nil;
-    
-    NSData *headerPattern = getHeaderPattern();
-    NSData *footerPattern = getFooterPattern();
-    if (outBuffer[164] == height && outBuffer[166] == width && headerPattern != nil && footerPattern != nil) {
-        outBuffer[164] = 0;
-        outBuffer[166] = 0;
-        
-        if (memcmp(headerPattern.bytes, outBuffer, headerPattern.length) == 0) {
-            if (memcmp(footerPattern.bytes, outBuffer + outSize - footerPattern.length, footerPattern.length) == 0) {
-                serializedData = [[NSMutableData alloc] init];
-                uint8_t version = 1;
-                [serializedData appendBytes:&version length:1];
-                uint8_t outWidth = (uint8_t)width;
-                uint8_t outHeight = (uint8_t)height;
-                [serializedData appendBytes:&outHeight length:1];
-                [serializedData appendBytes:&outWidth length:1];
-                unsigned long contentSize = outSize - headerPattern.length - footerPattern.length;
-                [serializedData appendBytes:outBuffer + headerPattern.length length:contentSize];
-            }
-        }
-    }
+    NSMutableData *serializedData = buildMiniThumbnailData(outBuffer, outSize, width, height);
     
     jpeg_destroy_compress(&cinfo);
     
@@ -629,43 +602,12 @@ NSData * _Nullable compressMiniThumbnail(UIImage * _Nonnull image, CGSize size) 
     
     int width = (int)fittedSize.width;
     int height = (int)fittedSize.height;
-    
-    int targetBytesPerRow = ((4 * (int)width) + 31) & (~31);
-    uint8_t *targetMemory = (uint8_t *)malloc((int)(targetBytesPerRow * height));
-    
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGBitmapInfo bitmapInfo = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host;
-    
-    CGContextRef targetContext = CGBitmapContextCreate(targetMemory, width, height, 8, targetBytesPerRow, colorSpace, bitmapInfo);
-    
-    UIGraphicsPushContext(targetContext);
-    
-    CGColorSpaceRelease(colorSpace);
-    
-    CGContextDrawImage(targetContext, CGRectMake(0, 0, width, height), image.CGImage);
-    
-    UIGraphicsPopContext();
-    
-    int bufferBytesPerRow = ((3 * (int)width) + 31) & (~31);
-    uint8_t *buffer = (uint8_t *)malloc(bufferBytesPerRow * height);
-    
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint32_t *color = ((uint32_t *)&targetMemory[y * targetBytesPerRow + x * 4]);
-            
-            uint32_t r = ((*color >> 16) & 0xff);
-            uint32_t g = ((*color >> 8) & 0xff);
-            uint32_t b = (*color & 0xff);
-            
-            buffer[y * bufferBytesPerRow + x * 3 + 0] = r;
-            buffer[y * bufferBytesPerRow + x * 3 + 1] = g;
-            buffer[y * bufferBytesPerRow + x * 3 + 2] = b;
-        }
+
+    size_t bufferBytesPerRow = 0;
+    uint8_t *buffer = createRGB888BufferFromImage(image, width, height, &bufferBytesPerRow);
+    if (buffer == NULL) {
+        return nil;
     }
-    
-    CGContextRelease(targetContext);
-    
-    free(targetMemory);
     
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
@@ -690,34 +632,13 @@ NSData * _Nullable compressMiniThumbnail(UIImage * _Nonnull image, CGSize size) 
     
     JSAMPROW rowPointer[1];
     while (cinfo.next_scanline < cinfo.image_height) {
-        rowPointer[0] = (JSAMPROW)(buffer + cinfo.next_scanline * bufferBytesPerRow);
+        rowPointer[0] = (JSAMPROW)(buffer + (size_t)cinfo.next_scanline * bufferBytesPerRow);
         jpeg_write_scanlines(&cinfo, rowPointer, 1);
     }
     
     jpeg_finish_compress(&cinfo);
     
-    NSMutableData *serializedData = nil;
-    
-    NSData *headerPattern = getHeaderPattern();
-    NSData *footerPattern = getFooterPattern();
-    if (outBuffer[164] == height && outBuffer[166] == width && headerPattern != nil && footerPattern != nil) {
-        outBuffer[164] = 0;
-        outBuffer[166] = 0;
-        
-        if (memcmp(headerPattern.bytes, outBuffer, headerPattern.length) == 0) {
-            if (memcmp(footerPattern.bytes, outBuffer + outSize - footerPattern.length, footerPattern.length) == 0) {
-                serializedData = [[NSMutableData alloc] init];
-                uint8_t version = 1;
-                [serializedData appendBytes:&version length:1];
-                uint8_t outWidth = (uint8_t)width;
-                uint8_t outHeight = (uint8_t)height;
-                [serializedData appendBytes:&outHeight length:1];
-                [serializedData appendBytes:&outWidth length:1];
-                unsigned long contentSize = outSize - headerPattern.length - footerPattern.length;
-                [serializedData appendBytes:outBuffer + headerPattern.length length:contentSize];
-            }
-        }
-    }
+    NSMutableData *serializedData = buildMiniThumbnailData(outBuffer, outSize, width, height);
     
     jpeg_destroy_compress(&cinfo);
     
@@ -733,38 +654,69 @@ UIImage * _Nullable decompressImage(NSData * _Nonnull sourceData) {
 }
 #else
 UIImage * _Nullable decompressImage(NSData * _Nonnull sourceData) {
-    long unsigned int jpegSize = sourceData.length;
-    unsigned char *_compressedImage = (unsigned char *)sourceData.bytes;
-
-    int jpegSubsamp, width, height;
-
-    tjhandle _jpegDecompressor = tjInitDecompress();
-
-    if (tjDecompressHeader2(_jpegDecompressor, _compressedImage, jpegSize, &width, &height, &jpegSubsamp) != 0) {
+    if (sourceData == nil || sourceData.length == 0) {
         return nil;
     }
 
-    int sourceBytesPerRow = (3 * width + 31) & ~0x1F;
-    int targetBytesPerRow = (4 * width + 31) & ~0x1F;
+    long unsigned int jpegSize = sourceData.length;
+    unsigned char *_compressedImage = (unsigned char *)sourceData.bytes;
 
-    unsigned char *buffer = (uint8_t *)malloc(sourceBytesPerRow * height);
+    int jpegSubsamp = 0;
+    int width = 0;
+    int height = 0;
 
-    tjDecompress2(_jpegDecompressor, _compressedImage, jpegSize, buffer, width, sourceBytesPerRow, height, TJPF_RGB, TJFLAG_FASTDCT | TJFLAG_FASTUPSAMPLE);
+    tjhandle _jpegDecompressor = tjInitDecompress();
+    if (_jpegDecompressor == NULL) {
+        return nil;
+    }
 
+    if (tjDecompressHeader2(_jpegDecompressor, _compressedImage, jpegSize, &width, &height, &jpegSubsamp) != 0 || width <= 0 || height <= 0) {
+        tjDestroy(_jpegDecompressor);
+        return nil;
+    }
+
+    size_t widthSz = (size_t)width;
+    size_t heightSz = (size_t)height;
+    if (widthSz > (SIZE_MAX - 31) / 4) {
+        tjDestroy(_jpegDecompressor);
+        return nil;
+    }
+    size_t sourceBytesPerRow = (3 * widthSz + 31) & ~(size_t)0x1F;
+    size_t targetBytesPerRow = (4 * widthSz + 31) & ~(size_t)0x1F;
+    if (heightSz > SIZE_MAX / targetBytesPerRow) {
+        tjDestroy(_jpegDecompressor);
+        return nil;
+    }
+
+    unsigned char *buffer = (uint8_t *)malloc(sourceBytesPerRow * heightSz);
+    if (buffer == NULL) {
+        tjDestroy(_jpegDecompressor);
+        return nil;
+    }
+
+    int decompressStatus = tjDecompress2(_jpegDecompressor, _compressedImage, jpegSize, buffer, width, (int)sourceBytesPerRow, height, TJPF_RGB, TJFLAG_FASTDCT | TJFLAG_FASTUPSAMPLE);
     tjDestroy(_jpegDecompressor);
+    if (decompressStatus != 0) {
+        free(buffer);
+        return nil;
+    }
 
     vImage_Buffer source;
-    source.width = width;
-    source.height = height;
+    source.width = widthSz;
+    source.height = heightSz;
     source.rowBytes = sourceBytesPerRow;
     source.data = buffer;
 
     vImage_Buffer target;
-    target.width = width;
-    target.height = height;
+    target.width = widthSz;
+    target.height = heightSz;
     target.rowBytes = targetBytesPerRow;
 
-    unsigned char *targetBuffer = (uint8_t *)malloc(targetBytesPerRow * height);
+    unsigned char *targetBuffer = (uint8_t *)malloc(targetBytesPerRow * heightSz);
+    if (targetBuffer == NULL) {
+        free(buffer);
+        return nil;
+    }
     target.data = targetBuffer;
 
     vImageConvert_RGB888toARGB8888(&source, nil, 0xff, &target, false, kvImageDoNotTile);
@@ -772,11 +724,15 @@ UIImage * _Nullable decompressImage(NSData * _Nonnull sourceData) {
     free(buffer);
 
     vImage_Buffer permuteTarget;
-    permuteTarget.width = width;
-    permuteTarget.height = height;
+    permuteTarget.width = widthSz;
+    permuteTarget.height = heightSz;
     permuteTarget.rowBytes = targetBytesPerRow;
 
-    unsigned char *permuteTargetBuffer = (uint8_t *)malloc(targetBytesPerRow * height);
+    unsigned char *permuteTargetBuffer = (uint8_t *)malloc(targetBytesPerRow * heightSz);
+    if (permuteTargetBuffer == NULL) {
+        free(targetBuffer);
+        return nil;
+    }
     permuteTarget.data = permuteTargetBuffer;
 
     const uint8_t permuteMap[4] = {3,2,1,0};
@@ -784,11 +740,14 @@ UIImage * _Nullable decompressImage(NSData * _Nonnull sourceData) {
 
     free(targetBuffer);
 
-    NSData *resultData = [[NSData alloc] initWithBytesNoCopy:permuteTargetBuffer length:targetBytesPerRow * height deallocator:^(void * _Nonnull bytes, __unused NSUInteger length) {
+    NSData *resultData = [[NSData alloc] initWithBytesNoCopy:permuteTargetBuffer length:targetBytesPerRow * heightSz deallocator:^(void * _Nonnull bytes, __unused NSUInteger length) {
         free(bytes);
     }];
 
     CGDataProviderRef dataProvider = CGDataProviderCreateWithCFData((__bridge CFDataRef)resultData);
+    if (dataProvider == NULL) {
+        return nil;
+    }
 
     static CGColorSpaceRef imageColorSpace;
     static CGBitmapInfo bitmapInfo;
@@ -801,9 +760,12 @@ UIImage * _Nullable decompressImage(NSData * _Nonnull sourceData) {
         UIGraphicsEndImageContext();
     });
 
-    CGImageRef cgImg = CGImageCreate(width, height, 8, 32, targetBytesPerRow, imageColorSpace, bitmapInfo, dataProvider, NULL, true, kCGRenderingIntentDefault);
+    CGImageRef cgImg = CGImageCreate(widthSz, heightSz, 8, 32, targetBytesPerRow, imageColorSpace, bitmapInfo, dataProvider, NULL, true, kCGRenderingIntentDefault);
 
     CGDataProviderRelease(dataProvider);
+    if (cgImg == NULL) {
+        return nil;
+    }
 
     UIImage *resultImage = [[UIImage alloc] initWithCGImage:cgImg];
     CGImageRelease(cgImg);

@@ -308,21 +308,60 @@
                     fileName = asset.fileName;
                 }
                 
-                if (convertToJpeg && iosMajorVersion() >= 10 && [asset.uniformTypeIdentifier rangeOfString:@"heic"].location != NSNotFound)
+                if (convertToJpeg && iosMajorVersion() >= 10 && [asset.uniformTypeIdentifier rangeOfString:@"heic"].location != NSNotFound && imageData != nil)
                 {
                     CIContext *context = [[CIContext alloc] init];
                     CIImage *image = [[CIImage alloc] initWithData:imageData];
                     NSURL *tmpURL = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[[NSString alloc] initWithFormat:@"%x.jpg", (int)arc4random()]]];
                     
-                    if ([context writeJPEGRepresentationOfImage:image toURL:tmpURL colorSpace:image.colorSpace options:@{} error:nil])
+                    CGColorSpaceRef safeColorSpace = NULL;
+                    if (image != nil)
                     {
-                        fileUrl = tmpURL;
-                        dataUTI = @"public.jpeg";
-                        imageData = [[NSData alloc] initWithContentsOfFile:fileUrl.path options:NSDataReadingMappedAlways error:nil];
-                        NSString *lowcaseString = [fileName lowercaseString];
-                        NSRange range = [lowcaseString rangeOfString:@".heic"];
-                        if (range.location != NSNotFound)
-                            fileName = [fileName stringByReplacingCharactersInRange:range withString:@".JPG"];
+                        CGColorSpaceRef srcSpace = image.colorSpace;
+                        if (srcSpace != NULL && CGColorSpaceGetModel(srcSpace) == kCGColorSpaceModelRGB && !CGColorSpaceUsesExtendedRange(srcSpace))
+                        {
+                            safeColorSpace = CGColorSpaceRetain(srcSpace);
+                        }
+                        else
+                        {
+                            safeColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+                            if (safeColorSpace == NULL)
+                            {
+                                safeColorSpace = CGColorSpaceCreateDeviceRGB();
+                            }
+                        }
+                    }
+                    
+                    BOOL wroteJpeg = NO;
+                    if (image != nil && safeColorSpace != NULL)
+                    {
+                        @try
+                        {
+                            wroteJpeg = [context writeJPEGRepresentationOfImage:image toURL:tmpURL colorSpace:safeColorSpace options:@{} error:nil];
+                        }
+                        @catch (NSException *exception)
+                        {
+                            wroteJpeg = NO;
+                        }
+                    }
+                    if (safeColorSpace != NULL)
+                    {
+                        CGColorSpaceRelease(safeColorSpace);
+                    }
+                    
+                    if (wroteJpeg)
+                    {
+                        NSData *convertedData = [[NSData alloc] initWithContentsOfFile:tmpURL.path options:NSDataReadingMappedAlways error:nil];
+                        if (convertedData != nil && convertedData.length > 0)
+                        {
+                            fileUrl = tmpURL;
+                            dataUTI = @"public.jpeg";
+                            imageData = convertedData;
+                            NSString *lowcaseString = [fileName lowercaseString];
+                            NSRange range = [lowcaseString rangeOfString:@".heic"];
+                            if (range.location != NSNotFound)
+                                fileName = [fileName stringByReplacingCharactersInRange:range withString:@".JPG"];
+                        }
                     }
                 }
                 

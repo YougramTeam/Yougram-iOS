@@ -132,9 +132,15 @@
             (id)kCGImageSourceCreateThumbnailFromImageIfAbsent : (id)kCFBooleanTrue,
             (id)kCGImageSourceThumbnailMaxPixelSize : @(MAX(size.width, size.height) * TGScreenScaling())
         });
+        if (imageRef == NULL)
+            imageRef = CGImageSourceCreateImageAtIndex(imageSource, 0, nil);
     
-        UIImage *image = [UIImage imageWithCGImage:imageRef];
-        CGImageRelease(imageRef);
+        UIImage *image = nil;
+        if (imageRef != NULL)
+        {
+            image = [UIImage imageWithCGImage:imageRef];
+            CGImageRelease(imageRef);
+        }
         CFRelease(imageSource);
         
         [subscriber putNext:image];
@@ -207,8 +213,12 @@
             if (imageRef == NULL)
                 imageRef = CGImageSourceCreateImageAtIndex(imageSource, 0, nil);
             
-            UIImage *image = [UIImage imageWithCGImage:imageRef];
-            CGImageRelease(imageRef);
+            UIImage *image = nil;
+            if (imageRef != NULL)
+            {
+                image = [UIImage imageWithCGImage:imageRef];
+                CGImageRelease(imageRef);
+            }
             CFRelease(imageSource);
             
             [subscriber putNext:image];

@@ -38,6 +38,12 @@ func chatListSelectionOptions(context: AccountContext, peerIds: Set<EnginePeer.I
             }
             |> distinctUntilChanged
         }
+    } else if peerIds.count > 100 {
+        return context.engine.messages.yougramAnyPeerHasUnread(peerIds: peerIds)
+        |> map { hasUnread -> ChatListSelectionOptions in
+            return ChatListSelectionOptions(read: .selective(enabled: hasUnread), delete: true)
+        }
+        |> distinctUntilChanged
     } else {
         return context.engine.data.subscribe(EngineDataList(
             peerIds.map(TelegramEngine.EngineData.Item.Messages.PeerReadCounters.init)

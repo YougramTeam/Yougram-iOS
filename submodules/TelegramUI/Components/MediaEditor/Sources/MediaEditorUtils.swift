@@ -2,6 +2,8 @@ import Foundation
 import UIKit
 import Display
 import AVFoundation
+import CoreImage
+import Metal
 import SwiftSignalKit
 import TelegramCore
 import AccountContext
@@ -101,37 +103,55 @@ func linearPCMAudioSettings(matching encoderSettings: [String: Any]) -> [String:
 }
 
 func loadTexture(image: UIImage, device: MTLDevice) -> MTLTexture? {
-    func dataForImage(_ image: UIImage) -> UnsafeMutablePointer<UInt8> {
-        let imageRef = image.cgImage
-        let width = Int(image.size.width)
-        let height = Int(image.size.height)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        
-        let rawData = UnsafeMutablePointer<UInt8>.allocate(capacity: width * height * 4)
-        let bytePerPixel = 4
-        let bytesPerRow = bytePerPixel * Int(width)
-        let bitsPerComponent = 8
-        let bitmapInfo = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
-        if let context = CGContext(data: rawData, width: width, height: height, bitsPerComponent: bitsPerComponent, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) {
-            context.clear(CGRect(x: 0, y: 0, width: width, height: height))
-            context.draw(imageRef!, in: CGRect(x: 0, y: 0, width: width, height: height))
-        }
-        return rawData
+    let imageRef: CGImage
+    if let cgImage = image.cgImage {
+        imageRef = cgImage
+    } else if let ciImage = image.ciImage, let rendered = CIContext(options: nil).createCGImage(ciImage, from: ciImage.extent) {
+        imageRef = rendered
+    } else {
+        return nil
     }
     
-    let width = Int(image.size.width * image.scale)
-    let height = Int(image.size.height * image.scale)
+    var width = Int(round(image.size.width * image.scale))
+    var height = Int(round(image.size.height * image.scale))
+    if width <= 0 || height <= 0 {
+        width = imageRef.width
+        height = imageRef.height
+    }
+    guard width > 0 && height > 0 else {
+        return nil
+    }
+    
+    let maxSide = mediaEditorComposeMaxTextureSide(device: device)
+    if max(width, height) > maxSide {
+        let downscale = Double(maxSide) / Double(max(width, height))
+        width = max(1, Int(Double(width) * downscale))
+        height = max(1, Int(Double(height) * downscale))
+    }
+    
     let bytePerPixel = 4
     let bytesPerRow = bytePerPixel * width
+    let totalBytes = bytesPerRow * height
+    let rawData = UnsafeMutablePointer<UInt8>.allocate(capacity: totalBytes)
+    defer {
+        rawData.deallocate()
+    }
     
-    var texture : MTLTexture?
-    let region = MTLRegionMake2D(0, 0, Int(width), Int(height))
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let bitsPerComponent = 8
+    let bitmapInfo = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
+    guard let context = CGContext(data: rawData, width: width, height: height, bitsPerComponent: bitsPerComponent, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) else {
+        return nil
+    }
+    context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+    context.draw(imageRef, in: CGRect(x: 0, y: 0, width: width, height: height))
+    
+    let region = MTLRegionMake2D(0, 0, width, height)
     let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
-    texture = device.makeTexture(descriptor: textureDescriptor)
-    
-    let data = dataForImage(image)
-    texture?.replace(region: region, mipmapLevel: 0, withBytes: data, bytesPerRow: bytesPerRow)
-    data.deallocate()
+    guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
+        return nil
+    }
+    texture.replace(region: region, mipmapLevel: 0, withBytes: rawData, bytesPerRow: bytesPerRow)
     
     return texture
 }

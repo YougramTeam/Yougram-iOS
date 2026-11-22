@@ -196,6 +196,8 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         
     private var passcodeLockTooltipDisposable = MetaDisposable()
     private var didShowPasscodeLockTooltipController = false
+    private let selectAllChatsDisposable = MetaDisposable()
+    fileprivate var allSelectableChatsInfo: (group: EngineChatList.Group, filterId: Int32?, count: Int)?
     
     private var suggestLocalizationDisposable = MetaDisposable()
     private var didSuggestLocalization = false
@@ -892,6 +894,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     
     deinit {
         self.openMessageFromSearchDisposable.dispose()
+        self.selectAllChatsDisposable.dispose()
         self.badgeDisposable?.dispose()
         self.badgeIconDisposable?.dispose()
         self.passcodeLockTooltipDisposable.dispose()
@@ -3001,7 +3004,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         if let primaryContext = self.primaryContext {
             var displayBackButton: Bool = false
             if self.previousItem != nil {
-                displayBackButton = true
+                if case .chatList(.archive) = self.chatListDisplayNode.effectiveContainerNode.location, self.chatListDisplayNode.isEditing, self.secondaryContext == nil {
+                    displayBackButton = false
+                } else {
+                    displayBackButton = true
+                }
             }
             primaryContent = ChatListHeaderComponent.Content(
                 title: self.plainTitle,
@@ -3700,7 +3707,62 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         }
     }
     
+    fileprivate func currentChatListGroupAndPredicate() -> (group: EngineChatList.Group, filterId: Int32?, predicate: ChatListFilterPredicate?)? {
+        guard case let .chatList(group) = self.chatListDisplayNode.effectiveContainerNode.location else {
+            return nil
+        }
+        let filterId: Int32?
+        let filterPredicate: ChatListFilterPredicate?
+        if let filter = self.chatListDisplayNode.effectiveContainerNode.currentItemNode.chatListFilter, case let .filter(id, _, _, data) = filter {
+            filterId = id
+            filterPredicate = chatListFilterPredicate(filter: data, accountPeerId: self.context.account.peerId)
+        } else {
+            filterId = nil
+            filterPredicate = nil
+        }
+        return (group, filterId, filterPredicate)
+    }
+
+    fileprivate func isAllChatsSelected(group: EngineChatList.Group, filterId: Int32?, selectedCount: Int) -> Bool {
+        guard selectedCount > 0, let info = self.allSelectableChatsInfo else {
+            return false
+        }
+        return info.group == group && info.filterId == filterId && info.count > 0 && selectedCount >= info.count
+    }
+
+    @objc fileprivate func toggleSelectAllPressed() {
+        guard let (group, filterId, filterPredicate) = self.currentChatListGroupAndPredicate() else {
+            return
+        }
+        let currentSelectedCount = self.chatListDisplayNode.effectiveContainerNode.currentItemNode.currentState.selectedPeerIds.count
+        if self.isAllChatsSelected(group: group, filterId: filterId, selectedCount: currentSelectedCount) {
+            self.chatListDisplayNode.effectiveContainerNode.updateState { state in
+                var state = state
+                state.selectedPeerIds.removeAll()
+                return state
+            }
+            return
+        }
+
+        self.selectAllChatsDisposable.set(
+            (self.context.engine.messages.yougramAllChatListPeerIds(group: group, filterPredicate: filterPredicate)
+            |> deliverOnMainQueue).startStrict(next: { [weak self] peerIds in
+                guard let self else {
+                    return
+                }
+                self.allSelectableChatsInfo = (group, filterId, peerIds.count)
+                self.chatListDisplayNode.effectiveContainerNode.currentItemNode.selectionLimit = Int32.max
+                self.chatListDisplayNode.effectiveContainerNode.updateState { state in
+                    var state = state
+                    state.selectedPeerIds = Set(peerIds)
+                    return state
+                }
+            })
+        )
+    }
+
     @objc func editPressed() {
+        self.chatListDisplayNode.effectiveContainerNode.currentItemNode.selectionLimit = Int32.max
         if self.secondaryContext == nil {
             if case .chatList(.root) = self.chatListDisplayNode.effectiveContainerNode.location {
                 self.effectiveContext?.leftButton = NavigationBarComponent.Button(id: "done",
@@ -3709,14 +3771,32 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         self?.donePressed()
                     }
                 )
+                self.effectiveContext?.rightButton = NavigationBarComponent.Button(id: "selectAll",
+                    content: .text(title: "Select All", isBold: false),
+                    action: { [weak self] _ in
+                        self?.toggleSelectAllPressed()
+                    }
+                )
+                self.effectiveContext?.storyButton = nil
+                self.effectiveContext?.proxyButton = nil
                 (self.navigationController as? NavigationController)?.updateMasterDetailsBlackout(.details, transition: .animated(duration: 0.5, curve: .spring))
             } else {
+                if case .chatList(.archive) = self.chatListDisplayNode.effectiveContainerNode.location {
+                    self.effectiveContext?.leftButton = NavigationBarComponent.Button(id: "selectAll",
+                        content: .text(title: "Select All", isBold: false),
+                        action: { [weak self] _ in
+                            self?.toggleSelectAllPressed()
+                        }
+                    )
+                }
                 self.effectiveContext?.rightButton = NavigationBarComponent.Button(id: "done",
                     content: .text(title: self.presentationData.strings.Common_Done, isBold: true),
                     action: { [weak self] _ in
                         self?.donePressed()
                     }
                 )
+                self.effectiveContext?.storyButton = nil
+                self.effectiveContext?.proxyButton = nil
                 (self.navigationController as? NavigationController)?.updateMasterDetailsBlackout(.master, transition: .animated(duration: 0.5, curve: .spring))
             }
         }
@@ -3739,6 +3819,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     
     @objc fileprivate func donePressed() {
         let skipLayoutUpdate = self.reorderingDonePressed()
+        self.selectAllChatsDisposable.set(nil)
+        self.allSelectableChatsInfo = nil
+        if case .chatList(.archive) = self.chatListDisplayNode.effectiveContainerNode.location, self.secondaryContext == nil {
+            self.effectiveContext?.leftButton = nil
+        }
         
         (self.navigationController as? NavigationController)?.updateMasterDetailsBlackout(nil, transition: .animated(duration: 0.4, curve: .spring))
         
@@ -5265,26 +5350,14 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 ])
                 self.present(actionSheet, in: .window(.root))
             } else if !peerIds.isEmpty {
-                let _ = (self.context.engine.data.get(
-                    EngineDataList(peerIds.map(TelegramEngine.EngineData.Item.Peer.Peer.init(id:)))
-                )
-                |> deliverOnMainQueue).start(next: { [weak self] peers in
+                let _ = (self.context.engine.messages.yougramClassifyPeerTypes(peerIds: Array(peerIds))
+                |> deliverOnMainQueue).start(next: { [weak self] classification in
                     guard let self else {
                         return
                     }
                     
-                    var havePrivateChats = false
-                    var haveNonPrivateChats = false
-                    for peer in peers {
-                        if let peer {
-                            switch peer {
-                            case .user, .secretChat:
-                                havePrivateChats = true
-                            default:
-                                haveNonPrivateChats = true
-                            }
-                        }
-                    }
+                    let havePrivateChats = classification.havePrivateChats
+                    let haveNonPrivateChats = classification.haveNonPrivateChats
                     
                     let actionSheet = ActionSheetController(presentationData: self.presentationData)
                     var items: [ActionSheetItem] = []
@@ -5449,8 +5522,13 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             case let .chatList(groupId):
                 if !peerIds.isEmpty {
                     if groupId == .root {
+                        let servicePeerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(777000))
+                        let accountPeerId = self.context.account.peerId
+                        let archivablePeerIds = peerIds.filter { $0 != servicePeerId && $0 != accountPeerId }
                         self.donePressed()
-                        self.archiveChats(peerIds: Array(peerIds))
+                        if !archivablePeerIds.isEmpty {
+                            self.archiveChats(peerIds: archivablePeerIds)
+                        }
                     } else {
                         if !peerIds.isEmpty {
                             self.chatListDisplayNode.effectiveContainerNode.currentItemNode.setCurrentRemovingItemId(ChatListNodeState.ItemId(peerId: peerIds.first!, threadId: nil))
@@ -7397,15 +7475,16 @@ private final class ChatListLocationContext {
                         }
                     }
                     if archiveEnabled {
+                        let servicePeerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(777000))
+                        let accountPeerId = strongSelf.context.account.peerId
+                        var hasArchivablePeer = false
                         for peerId in peerIds {
-                            if peerId == PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(777000)) {
-                                archiveEnabled = false
-                                break
-                            } else if peerId == strongSelf.context.account.peerId {
-                                archiveEnabled = false
+                            if peerId != servicePeerId && peerId != accountPeerId {
+                                hasArchivablePeer = true
                                 break
                             }
                         }
+                        archiveEnabled = hasArchivablePeer
                     }
                     toolbar = Toolbar(leftAction: leftAction, rightAction: ToolbarAction(title: presentationData.strings.Common_Delete, isEnabled: options.delete, color: .custom(presentationData.theme.actionSheet.destructiveActionTextColor)), middleAction: displayArchive ? ToolbarAction(title: presentationData.strings.ChatList_ArchiveAction, isEnabled: archiveEnabled) : nil)
                 } else if case .forum = strongSelf.location {
@@ -7496,8 +7575,47 @@ private final class ChatListLocationContext {
         var titleContent: NetworkStatusTitle
         
         if stateAndFilterId.state.editing {
-            if case .chatList(.root) = self.location {
-                self.rightButton = nil
+            if let parentController = self.parentController {
+                parentController.chatListDisplayNode.effectiveContainerNode.currentItemNode.selectionLimit = Int32.max
+            }
+            if case let .chatList(group) = self.location {
+                let selectedCount = stateAndFilterId.state.selectedPeerIds.count
+                let isAllSelected = self.parentController?.isAllChatsSelected(
+                    group: group,
+                    filterId: stateAndFilterId.filterId,
+                    selectedCount: selectedCount
+                ) ?? false
+                let selectAllButton = NavigationBarComponent.Button(
+                    id: "selectAll",
+                    content: .text(title: isAllSelected ? "Deselect All" : "Select All", isBold: false),
+                    action: { [weak self] _ in
+                        self?.parentController?.toggleSelectAllPressed()
+                    }
+                )
+                if group == .root {
+                    self.leftButton = NavigationBarComponent.Button(
+                        id: "done",
+                        content: .text(title: presentationData.strings.Common_Done, isBold: true),
+                        action: { [weak self] _ in
+                            self?.parentController?.donePressed()
+                        }
+                    )
+                    self.rightButton = selectAllButton
+                } else {
+                    if self.parentController?.secondaryContext == nil {
+                        self.leftButton = selectAllButton
+                        self.rightButton = NavigationBarComponent.Button(
+                            id: "done",
+                            content: .text(title: presentationData.strings.Common_Done, isBold: true),
+                            action: { [weak self] _ in
+                                self?.parentController?.donePressed()
+                            }
+                        )
+                    } else {
+                        self.leftButton = nil
+                        self.rightButton = selectAllButton
+                    }
+                }
                 self.storyButton = nil
                 self.proxyButton = nil
             }
@@ -7510,6 +7628,7 @@ private final class ChatListLocationContext {
                 }
             }
             titleContent = NetworkStatusTitle(text: title, activity: false, hasProxy: false, connectsViaProxy: false, isPasscodeSet: false, isManuallyLocked: false, peerStatus: peerStatus)
+            self.chatListTitle = titleContent
             let _ = animated
         } else if isReorderingTabs {
             if case .chatList(.root) = self.location {
@@ -7607,6 +7726,9 @@ private final class ChatListLocationContext {
                     self.storyButton = nil
                 }
             } else {
+                self.leftButton = nil
+                self.storyButton = nil
+                self.proxyButton = nil
                 let parentController = self.parentController
                 self.rightButton = NavigationBarComponent.Button(id: "more",
                     content: .more,

@@ -1450,10 +1450,10 @@ class TilingView: UIView {
                 let drawingRect = CGRect(origin: CGPoint(x: imageRect.minX / normalizationScale, y: imageRect.minY / normalizationScale), size: CGSize(width: imageRect.width / normalizationScale, height: imageRect.height / normalizationScale))
                 
                 var tileImage: CGImage?
-                if normalizedContentScale < 1.1, let cachedScaledImage = cachedScaledImage {
-                    let cachedScale = cachedScaledImage.size.width / self.imageSize.width
+                if normalizedContentScale < 1.1, let cachedScaledImage = cachedScaledImage, let cachedCGImage = cachedScaledImage.cgImage {
+                    let cachedScale = cachedScaledImage.size.width / max(1.0, self.imageSize.width)
                     let scaledImageRect = CGRect(origin: CGPoint(x: imageRect.minX * cachedScale, y: imageRect.minY * cachedScale), size: CGSize(width: imageRect.width * cachedScale, height: imageRect.height * cachedScale))
-                    tileImage = cachedScaledImage.cgImage!.cropping(to: scaledImageRect)
+                    tileImage = cachedCGImage.cropping(to: scaledImageRect)
                 } else {
                     tileImage = image.cropping(to: imageRect)
                 }

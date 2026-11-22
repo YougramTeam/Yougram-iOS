@@ -3,6 +3,7 @@ import SwiftSignalKit
 import Postbox
 import TelegramCore
 import UIKit
+import CoreImage
 import TinyThumbnail
 import Display
 import FastBlur
@@ -50,7 +51,20 @@ private func adjustSaturationInContext(context: DrawingContext, saturation: CGFl
 }
 
 
+private func safeCGImage(from image: UIImage) -> CGImage? {
+    if let cgImage = image.cgImage {
+        return cgImage
+    }
+    if let ciImage = image.ciImage {
+        return CIContext(options: nil).createCGImage(ciImage, from: ciImage.extent)
+    }
+    return nil
+}
+
 private func generateBlurredThumbnail(image: UIImage, adjustSaturation: Bool = false) -> UIImage? {
+    guard let cgImage = safeCGImage(from: image) else {
+        return nil
+    }
     let thumbnailContextSize = CGSize(width: 32.0, height: 32.0)
     guard let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0) else {
         return nil
@@ -60,7 +74,7 @@ private func generateBlurredThumbnail(image: UIImage, adjustSaturation: Bool = f
     let imageRect = CGRect(origin: CGPoint(x: (thumbnailContextSize.width - filledSize.width) / 2.0, y: (thumbnailContextSize.height - filledSize.height) / 2.0), size: filledSize)
 
     thumbnailContext.withFlippedContext { c in
-        c.draw(image.cgImage!, in: imageRect)
+        c.draw(cgImage, in: imageRect)
     }
     telegramFastBlurMore(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
 
@@ -290,8 +304,8 @@ public final class DirectMediaImageCache {
             }
 
             let data = dataSignal.start(next: { data in
-                if let data = data, let image = UIImage(data: data) {
-                    let scaledSize = CGSize(width: CGFloat(width), height: floor(CGFloat(width) / aspectRatio))
+                if let data = data, let image = UIImage(data: data), let cgImage = safeCGImage(from: image), width > 0, aspectRatio > 0.0, aspectRatio.isFinite {
+                    let scaledSize = CGSize(width: CGFloat(width), height: max(1.0, floor(CGFloat(width) / aspectRatio)))
                     guard let scaledContext = DrawingContext(size: scaledSize, scale: 1.0, opaque: true) else {
                         subscriber.putNext(nil)
                         subscriber.putCompletion()
@@ -300,7 +314,7 @@ public final class DirectMediaImageCache {
                     scaledContext.withFlippedContext { context in
                         let filledSize = image.size.aspectFilled(scaledSize)
                         let imageRect = CGRect(origin: CGPoint(x: (scaledSize.width - filledSize.width) / 2.0, y: (scaledSize.height - filledSize.height) / 2.0), size: filledSize)
-                        context.draw(image.cgImage!, in: imageRect)
+                        context.draw(cgImage, in: imageRect)
                     }
 
                     if let scaledImage = storeImage(context: scaledContext, mediaBox: self.account.postbox.mediaBox, resourceId: resource.resource.id, imageType: .square(width: width, aspectRatio: aspectRatio)) {
