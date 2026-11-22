@@ -45,11 +45,11 @@ on:
         type: number
         default: 300
       signing:
-        description: unsigned builds a clean unsigned .ipa artifact with no TestFlight upload; testflight signs with your App Store Connect API key and uploads to TestFlight.
+        description: unsigned builds a clean unsigned .ipa artifact with no TestFlight upload (TestFlight temporarily disabled).
         type: choice
         options:
           - unsigned
-          - testflight
+          # - testflight # TestFlight temporarily disabled (signs with your App Store Connect API key and uploads to TestFlight).
         default: unsigned
 
 permissions:
@@ -133,7 +133,7 @@ jobs:
       # Before the long build, so a missing secret or App ID fails in seconds.
       - name: Prepare App Store signing
         id: signing
-        if: inputs.signing == 'testflight'
+        if: false # TestFlight temporarily disabled (was: inputs.signing == 'testflight')
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -282,7 +282,7 @@ jobs:
 
       - name: Upload to TestFlight
         id: upload
-        if: steps.build.outcome == 'success' && inputs.signing == 'testflight'
+        if: false # TestFlight temporarily disabled (was: steps.build.outcome == 'success' && inputs.signing == 'testflight')
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -312,7 +312,7 @@ jobs:
       # Whatever happened (failure, timeout, even a cancel): the signing certificate and
       # profiles made for this run must not outlive it.
       - name: Revoke this run's certificate and profiles
-        if: always() && inputs.signing == 'testflight'
+        if: false # TestFlight temporarily disabled (was: always() && inputs.signing == 'testflight')
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -391,7 +391,7 @@ jobs:
   testflight:
     name: TestFlight processing
     needs: build
-    if: ${{ !cancelled() && needs.build.outputs.uploaded_build != '' }}
+    if: false # TestFlight temporarily disabled (was: ${{ !cancelled() && needs.build.outputs.uploaded_build != '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
