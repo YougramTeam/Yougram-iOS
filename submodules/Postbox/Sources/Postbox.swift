@@ -4716,7 +4716,7 @@ final class PostboxImpl {
         for table in self.tables {
             table.clearMemoryCache()
         }
-        (self.valueBox as? SqliteValueBox)?.checkpointAndPurgeMemory()
+        self.valueBox.checkpointAndPurgeMemory()
     }
     
     public func optimizeStorage() -> Signal<Never, NoError> {
