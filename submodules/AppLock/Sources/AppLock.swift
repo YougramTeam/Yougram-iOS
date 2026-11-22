@@ -29,7 +29,7 @@ private func isLocked(passcodeSettings: PresentationPasscodeSettings, state: Loc
             if timestamp.bootTimestamp != applicationActivityTimestamp.bootTimestamp {
                 return true
             }
-            if timestamp.uptime >= applicationActivityTimestamp.uptime + autolockTimeout {
+            if autolockTimeout > 0, timestamp.uptime >= applicationActivityTimestamp.uptime + autolockTimeout {
                 return true
             }
         } else {
@@ -217,10 +217,18 @@ public final class AppLockContextImpl: AppLockContext {
                 if let _ = passcodeSettings.autolockTimeout, !isApplicationActive, !strongSelf.biometricAuthenticationState.suppressCoveringView {
                     shouldDisplayCoveringView = true
                 }
+
+                if !isApplicationInForeground, passcodeSettings.autolockTimeout == 0, state.applicationActivityTimestamp != nil {
+                    strongSelf.updateLockState { state in
+                        var state = state
+                        state.applicationActivityTimestamp = nil
+                        return state
+                    }
+                }
                 
                 if !isApplicationActive {
                     if let autolockTimeout = passcodeSettings.autolockTimeout {
-                        strongSelf.autolockReportTimeout.set(autolockTimeout)
+                        strongSelf.autolockReportTimeout.set(autolockTimeout == 0 ? 1 : autolockTimeout)
                     } else if state.isManuallyLocked {
                         strongSelf.autolockReportTimeout.set(1)
                     } else {
@@ -450,6 +458,9 @@ public final class AppLockContextImpl: AppLockContext {
     
     public func lock() {
         PasscodeSession.setApplicationAvailable(false)
+        if YougramVaultStore.shared.isEnabled(rootPath: self.rootPath) {
+            let _ = YougramLocalEncryptionHooks.handleAppLockTriggered?(true)
+        }
         self.updateLockState { state in
             // Face ID may still send active events after the user manually locks.
             self.suppressAutomaticBiometrics = true

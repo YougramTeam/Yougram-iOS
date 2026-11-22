@@ -1005,7 +1005,7 @@ public final class YougramVaultUnlockController: UIViewController, UITextFieldDe
             switch self.phase {
             case .sealing:
                 self.titleLabel.text = "Yougram"
-                self.subtitleLabel.text = "Encrypting…"
+                self.subtitleLabel.text = "Initializing…"
                 self.view.endEditing(true)
                 for view in interactiveViews {
                     view.alpha = 0.0

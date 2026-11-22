@@ -23,13 +23,17 @@ private final class PasscodeOptionsControllerArguments {
     let changePasscode: () -> Void
     let changePasscodeTimeout: () -> Void
     let changeTouchId: (Bool) -> Void
+    let changeScrambleKeypad: (Bool) -> Void
+    let openLocalEncryption: () -> Void
     let changeWalletProtection: (Bool, Bool) -> Void
     
-    init(turnPasscodeOff: @escaping () -> Void, changePasscode: @escaping () -> Void, changePasscodeTimeout: @escaping () -> Void, changeTouchId: @escaping (Bool) -> Void, changeWalletProtection: @escaping (Bool, Bool) -> Void) {
+    init(turnPasscodeOff: @escaping () -> Void, changePasscode: @escaping () -> Void, changePasscodeTimeout: @escaping () -> Void, changeTouchId: @escaping (Bool) -> Void, changeScrambleKeypad: @escaping (Bool) -> Void, openLocalEncryption: @escaping () -> Void, changeWalletProtection: @escaping (Bool, Bool) -> Void) {
         self.turnPasscodeOff = turnPasscodeOff
         self.changePasscode = changePasscode
         self.changePasscodeTimeout = changePasscodeTimeout
         self.changeTouchId = changeTouchId
+        self.changeScrambleKeypad = changeScrambleKeypad
+        self.openLocalEncryption = openLocalEncryption
         self.changeWalletProtection = changeWalletProtection
     }
 }
@@ -37,6 +41,7 @@ private final class PasscodeOptionsControllerArguments {
 private enum PasscodeOptionsSection: Int32 {
     case setting
     case options
+    case localEncryption
     case wallet
 }
 
@@ -67,13 +72,19 @@ private enum PasscodeOptionsEntry: ItemListNodeEntry {
     case walletInfo(PresentationTheme, String)
     case autoLock(PresentationTheme, String, String)
     case touchId(PresentationTheme, String, Bool)
+    case scrambleKeypad(PresentationTheme, String, Bool)
+    case localEncryptionHeader(PresentationTheme, String)
+    case localEncryption(PresentationTheme, String, String)
+    case localEncryptionInfo(PresentationTheme, String)
     
     var section: ItemListSectionId {
         switch self {
             case .togglePasscode, .changePasscode, .settingInfo:
                 return PasscodeOptionsSection.setting.rawValue
-            case .telegramHeader, .autoLock, .touchId:
+            case .telegramHeader, .autoLock, .touchId, .scrambleKeypad:
                 return PasscodeOptionsSection.options.rawValue
+            case .localEncryptionHeader, .localEncryption, .localEncryptionInfo:
+                return PasscodeOptionsSection.localEncryption.rawValue
             case .walletHeader, .walletPasscode, .walletBiometrics, .walletInfo:
                 return PasscodeOptionsSection.wallet.rawValue
         }
@@ -90,10 +101,14 @@ private enum PasscodeOptionsEntry: ItemListNodeEntry {
             case .telegramHeader: return 3
             case .autoLock: return 4
             case .touchId: return 5
-            case .walletHeader: return 6
-            case .walletPasscode: return 7
-            case .walletBiometrics: return 8
-            case .walletInfo: return 9
+            case .scrambleKeypad: return 6
+            case .localEncryptionHeader: return 7
+            case .localEncryption: return 8
+            case .localEncryptionInfo: return 9
+            case .walletHeader: return 10
+            case .walletPasscode: return 11
+            case .walletBiometrics: return 12
+            case .walletInfo: return 13
         }
     }
     
@@ -101,6 +116,15 @@ private enum PasscodeOptionsEntry: ItemListNodeEntry {
         switch lhs {
             case let .telegramHeader(theme, text):
                 if case let .telegramHeader(otherTheme, otherText) = rhs { return theme === otherTheme && text == otherText }
+                return false
+            case let .localEncryptionHeader(theme, text):
+                if case let .localEncryptionHeader(otherTheme, otherText) = rhs { return theme === otherTheme && text == otherText }
+                return false
+            case let .localEncryption(theme, text, value):
+                if case let .localEncryption(otherTheme, otherText, otherValue) = rhs { return theme === otherTheme && text == otherText && value == otherValue }
+                return false
+            case let .localEncryptionInfo(theme, text):
+                if case let .localEncryptionInfo(otherTheme, otherText) = rhs { return theme === otherTheme && text == otherText }
                 return false
             case let .walletHeader(theme, text):
                 if case let .walletHeader(otherTheme, otherText) = rhs { return theme === otherTheme && text == otherText }
@@ -145,6 +169,12 @@ private enum PasscodeOptionsEntry: ItemListNodeEntry {
                 } else {
                     return false
                 }
+            case let .scrambleKeypad(lhsTheme, lhsText, lhsValue):
+                if case let .scrambleKeypad(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                    return true
+                } else {
+                    return false
+                }
         }
     }
     
@@ -155,9 +185,13 @@ private enum PasscodeOptionsEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let arguments = arguments as! PasscodeOptionsControllerArguments
         switch self {
-            case let .telegramHeader(_, text), let .walletHeader(_, text):
+            case let .telegramHeader(_, text), let .localEncryptionHeader(_, text), let .walletHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-            case let .walletInfo(_, text):
+            case let .localEncryption(_, title, value):
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.security, title: title, label: value, sectionId: self.section, style: .blocks, action: {
+                    arguments.openLocalEncryption()
+                })
+            case let .localEncryptionInfo(_, text), let .walletInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .walletPasscode(_, title, value, enabled):
                 return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, enableInteractiveChanges: false, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
@@ -186,6 +220,10 @@ private enum PasscodeOptionsEntry: ItemListNodeEntry {
                 return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
                     arguments.changeTouchId(value)
                 }, tag: PasscodeOptionsEntryTag.touchId)
+            case let .scrambleKeypad(_, title, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                    arguments.changeScrambleKeypad(value)
+                })
         }
     }
 }
@@ -248,25 +286,36 @@ private struct PasscodeOptionsData: Equatable {
 
 private func autolockStringForTimeout(strings: PresentationStrings, timeout: Int32?) -> String {
     if let timeout = timeout {
-        if timeout == 10 {
+        if timeout == 0 {
+            return strings.Yougram_Encryption_AutoLockImmediately
+        } else if timeout == 10 {
             return "If away for 10 seconds"
         } else if timeout == 1 * 60 {
             return strings.PasscodeSettings_AutoLock_IfAwayFor_1minute
         } else if timeout == 5 * 60 {
             return strings.PasscodeSettings_AutoLock_IfAwayFor_5minutes
+        } else if timeout == 15 * 60 {
+            return strings.Yougram_Encryption_AutoLock15Min
         } else if timeout == 1 * 60 * 60 {
             return strings.PasscodeSettings_AutoLock_IfAwayFor_1hour
         } else if timeout == 5 * 60 * 60 {
             return strings.PasscodeSettings_AutoLock_IfAwayFor_5hours
         } else {
-            return ""
+            return "\(timeout)s"
         }
     } else {
         return strings.PasscodeSettings_AutoLock_Disabled
     }
 }
 
-private func passcodeOptionsControllerEntries(context: AccountContext, presentationData: PresentationData, state: PasscodeOptionsControllerState, passcodeOptionsData: PasscodeOptionsData) -> [PasscodeOptionsEntry] {
+private func passcodeOptionsControllerEntries(
+    context: AccountContext,
+    presentationData: PresentationData,
+    state: PasscodeOptionsControllerState,
+    passcodeOptionsData: PasscodeOptionsData,
+    localEncryptionEnabled: Bool,
+    scrambleKeypad: Bool
+) -> [PasscodeOptionsEntry] {
     var entries: [PasscodeOptionsEntry] = []
     
     let challenge = state.protection.map { $0.passcode.map { accessChallengeData(reference: $0) } ?? PostboxAccessChallengeData.none } ?? passcodeOptionsData.accessChallenge
@@ -288,6 +337,18 @@ private func passcodeOptionsControllerEntries(context: AccountContext, presentat
                         entries.append(.touchId(presentationData.theme, presentationData.strings.PasscodeSettings_UnlockWithFaceId, passcodeOptionsData.presentationSettings.enableBiometrics))
                 }
             }
+            entries.append(.scrambleKeypad(presentationData.theme, presentationData.strings.Yougram_Encryption_ScrambleKeypad, scrambleKeypad))
+    }
+
+    let encryptionLabel = localEncryptionEnabled ? presentationData.strings.Yougram_Encryption_On : presentationData.strings.Yougram_Encryption_Off
+    entries.append(.localEncryptionHeader(presentationData.theme, presentationData.strings.Yougram_Encryption_Title.uppercased()))
+    entries.append(.localEncryption(presentationData.theme, presentationData.strings.Yougram_Privacy_LocalEncryption, encryptionLabel))
+    entries.append(.localEncryptionInfo(presentationData.theme, "Optional local encryption for chats, media, and databases. Auto-Lock and Scramble PIN settings are shared across App Passcode and Local Encryption."))
+
+    switch challenge {
+        case .none:
+            break
+        case .numericalPassword, .plaintextPassword, .secured:
             if WalletConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 }).isAvailable {
                 entries.append(.walletHeader(presentationData.theme, presentationData.strings.PasscodeSettings_LockWallet.uppercased()))
                 let protectionEnabled = state.protection?.enabled == true
@@ -513,6 +574,61 @@ public func passcodeOptionsController(context: AccountContext, focusOnItemTag: P
         }
     }
 
+    let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+
+    let setTimeoutAction: (Int32?) -> Void = { [passcodeOptionsDataPromise] value in
+        let _ = (passcodeOptionsDataPromise.get()
+        |> take(1)).start(next: { [weak passcodeOptionsDataPromise] data in
+            passcodeOptionsDataPromise?.set(.single(data.withUpdatedPresentationSettings(data.presentationSettings.withUpdatedAutolockTimeout(value))))
+
+            let _ = updatePresentationPasscodeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
+                return current.withUpdatedAutolockTimeout(value)
+            }).start()
+
+            if YougramVaultStore.shared.isEnabled(rootPath: rootPath) {
+                try? YougramVaultStore.shared.setAutoLockTimeout(value, rootPath: rootPath)
+            }
+        })
+    }
+
+    let changePasscodeTimeoutImpl = {
+        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        var values: [Int32?] = [0, 1 * 60, 5 * 60, 15 * 60, 1 * 60 * 60, 5 * 60 * 60, nil]
+        
+        #if DEBUG
+            values.insert(10, at: 1)
+        #endif
+        
+        var items: [ContextMenuItem] = []
+        for t in values {
+            items.append(.action(ContextMenuActionItem(text: autolockStringForTimeout(strings: presentationData.strings, timeout: t), icon: { theme in
+                if currentAutolockTimeout == t {
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Check"), color: theme.contextMenu.primaryColor)
+                } else {
+                    return UIImage()
+                }
+            }, action: { _, f in
+                f(.default)
+                setTimeoutAction(t)
+            }, accessibilityIsSelected: currentAutolockTimeout == t)))
+        }
+        
+        guard let sourceNode = findAutolockReferenceNode?() else {
+            return
+        }
+        let contextController = makeContextController(
+            presentationData: presentationData,
+            source: .reference(PasscodeOptionsContextReferenceContentSource(sourceView: sourceNode.labelNode.view)),
+            items: .single(ContextController.Items(content: .list(items))),
+            gesture: nil
+        )
+        sourceNode.updateHasContextMenu(hasContextMenu: true)
+        contextController.dismissed = { [weak sourceNode] in
+            sourceNode?.updateHasContextMenu(hasContextMenu: false)
+        }
+        presentInGlobalOverlayImpl?(contextController)
+    }
+
     let arguments = PasscodeOptionsControllerArguments(turnPasscodeOff: {
         guard !sessionState.isUpdating else {
             return
@@ -527,7 +643,13 @@ public func passcodeOptionsController(context: AccountContext, focusOnItemTag: P
         }
         let generation = sessionState.generation
         if current.passcode == nil {
-            pushControllerImpl?(applicationPasscodeSetupController(context: context, session: nil, change: false, settingsSessionCompleted: { session in
+            let effectiveInitialTimeout: Int32?
+            if let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath) {
+                effectiveInitialTimeout = manifest.autoLockTimeout
+            } else {
+                effectiveInitialTimeout = 60 * 60
+            }
+            pushControllerImpl?(applicationPasscodeSetupController(context: context, session: nil, change: false, initialAutolockTimeout: effectiveInitialTimeout, settingsSessionCompleted: { session in
                 sessionState.replaceSession(session, generation: generation)
             }, completion: { reference in
                 guard sessionState.accepts(generation: generation) else { return }
@@ -634,56 +756,7 @@ public func passcodeOptionsController(context: AccountContext, focusOnItemTag: P
             }
         }, failed: finish)
     }, changePasscodeTimeout: {
-        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-        let setAction: (Int32?) -> Void = { [passcodeOptionsDataPromise] value in
-            let _ = (passcodeOptionsDataPromise.get()
-            |> take(1)).start(next: { [weak passcodeOptionsDataPromise] data in
-                passcodeOptionsDataPromise?.set(.single(data.withUpdatedPresentationSettings(data.presentationSettings.withUpdatedAutolockTimeout(value))))
-                
-                let _ = updatePresentationPasscodeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
-                    return current.withUpdatedAutolockTimeout(value)
-                }).start()
-            })
-        }
-        var values: [Int32] = [0, 1 * 60, 5 * 60, 1 * 60 * 60, 5 * 60 * 60]
-        
-        #if DEBUG
-            values.append(10)
-            values.sort()
-        #endif
-        
-        var items: [ContextMenuItem] = []
-        for value in values {
-            var t: Int32?
-            if value != 0 {
-                t = value
-            }
-            items.append(.action(ContextMenuActionItem(text: autolockStringForTimeout(strings: presentationData.strings, timeout: t), icon: { theme in
-                if currentAutolockTimeout == t {
-                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Check"), color: theme.contextMenu.primaryColor)
-                } else {
-                    return UIImage()
-                }
-            }, action: { _, f in
-                f(.default)
-                setAction(t)
-            }, accessibilityIsSelected: currentAutolockTimeout == t)))
-        }
-        
-        guard let sourceNode = findAutolockReferenceNode?() else {
-            return
-        }
-        let contextController = makeContextController(
-            presentationData: presentationData,
-            source: .reference(PasscodeOptionsContextReferenceContentSource(sourceView: sourceNode.labelNode.view)),
-            items: .single(ContextController.Items(content: .list(items))),
-            gesture: nil
-        )
-        sourceNode.updateHasContextMenu(hasContextMenu: true)
-        contextController.dismissed = { [weak sourceNode] in
-            sourceNode?.updateHasContextMenu(hasContextMenu: false)
-        }
-        presentInGlobalOverlayImpl?(contextController)
+        changePasscodeTimeoutImpl()
     }, changeTouchId: { [passcodeOptionsDataPromise] value in
         let _ = (passcodeOptionsDataPromise.get() |> take(1)).start(next: { [weak passcodeOptionsDataPromise] data in
             passcodeOptionsDataPromise?.set(.single(data.withUpdatedPresentationSettings(data.presentationSettings.withUpdatedEnableBiometrics(value))))
@@ -692,17 +765,41 @@ public func passcodeOptionsController(context: AccountContext, focusOnItemTag: P
                 return current.withUpdatedEnableBiometrics(value)
             }).start()
         })
+    }, changeScrambleKeypad: { value in
+        if YougramVaultStore.shared.isEnabled(rootPath: rootPath) {
+            try? YougramVaultStore.shared.setScrambledKeypad(value, rootPath: rootPath)
+        }
+        let _ = updateYougramSettingsInteractively(accountManager: context.sharedContext.accountManager, { settings in
+            var updated = settings
+            updated.scramblePasscodeKeypad = value
+            return updated
+        }).start()
+    }, openLocalEncryption: {
+        if let controller = YougramLocalEncryptionHooks.makeLocalEncryptionController?(context) as? ViewController {
+            pushControllerImpl?(controller)
+        }
     }, changeWalletProtection: { biometrics, enabled in
         changeWalletProtection(biometrics, enabled)
     })
     
-    let signal = combineLatest(context.sharedContext.presentationData, statePromise.get(), passcodeOptionsDataPromise.get()) |> deliverOnMainQueue
-    |> filter { _, state, _ in state.protectionLoaded }
-    |> map { presentationData, state, passcodeOptionsData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    let encryptionStateSignal: Signal<(Bool, Bool), NoError> = combineLatest(
+        YougramSettings.updates,
+        .single(()) |> then(YougramVaultStore.shared.stateChanges)
+    )
+    |> map { yougramSettings, _ -> (Bool, Bool) in
+        let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath)
+        let localEncryptionEnabled = manifest != nil
+        let scrambleKeypad = yougramSettings.scramblePasscodeKeypad || (manifest?.scrambledKeypad ?? false)
+        return (localEncryptionEnabled, scrambleKeypad)
+    }
+
+    let signal = combineLatest(context.sharedContext.presentationData, statePromise.get(), passcodeOptionsDataPromise.get(), encryptionStateSignal) |> deliverOnMainQueue
+    |> filter { _, state, _, _ in state.protectionLoaded }
+    |> map { presentationData, state, passcodeOptionsData, encryptionState -> (ItemListControllerState, (ItemListNodeState, Any)) in
         currentAutolockTimeout = passcodeOptionsData.presentationSettings.autolockTimeout
 
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.PasscodeSettings_Title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: passcodeOptionsControllerEntries(context: context, presentationData: presentationData, state: state, passcodeOptionsData: passcodeOptionsData), style: .blocks, ensureVisibleItemTag: focusOnItemTag, emptyStateItem: nil, animateChanges: true)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: passcodeOptionsControllerEntries(context: context, presentationData: presentationData, state: state, passcodeOptionsData: passcodeOptionsData, localEncryptionEnabled: encryptionState.0, scrambleKeypad: encryptionState.1), style: .blocks, ensureVisibleItemTag: focusOnItemTag, emptyStateItem: nil, animateChanges: true)
         
         return (controllerState, (listState, arguments))
     } |> afterDisposed {
@@ -779,6 +876,13 @@ public func passcodeOptionsAccessController(context: AccountContext, preferredMo
     |> deliverOnMainQueue
     |> map { challenge -> ViewController? in
         if case .none = challenge {
+            let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+            let effectiveInitialTimeout: Int32?
+            if let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath) {
+                effectiveInitialTimeout = manifest.autoLockTimeout
+            } else {
+                effectiveInitialTimeout = initialAutolockTimeout
+            }
             weak var introController: PrivacyIntroController?
             var didProceed = false
             let controller = PrivacyIntroController(context: context, mode: .passcode, preferredModalWidth: preferredModalWidth, proceedAction: {
@@ -788,7 +892,7 @@ public func passcodeOptionsAccessController(context: AccountContext, preferredMo
                     return
                 }
                 didProceed = true
-                let setupController = applicationPasscodeSetupController(context: context, session: nil, change: false, preferredModalWidth: preferredModalWidth, initialAutolockTimeout: initialAutolockTimeout, useCustomNumericKeyboard: useCustomNumericKeyboard, allowFourDigitPasscode: allowFourDigitPasscode, settingsSessionCompleted: { session in
+                let setupController = applicationPasscodeSetupController(context: context, session: nil, change: false, preferredModalWidth: preferredModalWidth, initialAutolockTimeout: effectiveInitialTimeout, useCustomNumericKeyboard: useCustomNumericKeyboard, allowFourDigitPasscode: allowFourDigitPasscode, settingsSessionCompleted: { session in
                     authorizationCompleted(.success(session))
                 }, cancelled: { authorizationCompleted(.failure(.cancelled)) }, completion: { _ in
                     deleteAllSendMessageIntents()

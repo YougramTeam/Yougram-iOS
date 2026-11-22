@@ -12,6 +12,8 @@ import AccountContext
 import MtProtoKit
 import AppLock
 import AppBundle
+import SettingsUI
+import YougramSettingsUI
 
 final class YougramLocalEncryptionCoordinator {
     static let shared = YougramLocalEncryptionCoordinator()
@@ -31,8 +33,8 @@ final class YougramLocalEncryptionCoordinator {
     private var isSealingInProgress = false
     private var isUnlockingInProgress = false
     private var suppressExternalLockUntil: CFAbsoluteTime = 0
-    private var cachedAppLockTimeout: Int32?
     private var didSyncInitialScramble = false
+    private var didReconcileInitialTimeout = false
 
     private var pausedAccountManager: AccountManager<TelegramAccountManagerTypes>?
     private var pausedAccounts: [Account] = []
@@ -91,15 +93,51 @@ final class YougramLocalEncryptionCoordinator {
             }
             return self.handleExternalAppLock(isManualLock: isManual)
         }
+        YougramLocalEncryptionHooks.makeLocalEncryptionController = { contextObj in
+            guard let context = contextObj as? AccountContext else {
+                return nil
+            }
+            return yougramLocalEncryptionController(context: context)
+        }
+        YougramLocalEncryptionHooks.openPasscodeOptions = { contextObj, navigate in
+            guard let context = contextObj as? AccountContext else {
+                return
+            }
+            let _ = passcodeOptionsAccessController(context: context, replaceController: { controller in
+                navigate(controller, true)
+            }, authorizationCompleted: { result in
+                guard case let .success(session) = result else { return }
+                navigate(passcodeOptionsController(context: context, settingsSession: session), true)
+            }).start(next: { controller in
+                if let controller {
+                    navigate(controller, false)
+                }
+            })
+        }
 
         self.passcodeTimeoutDisposable?.dispose()
         self.settingsSyncDisposable?.dispose()
 
         if let sharedContext {
             self.passcodeTimeoutDisposable = (sharedContext.accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.presentationPasscodeSettings]))
+            |> take(1)
             |> deliverOnMainQueue).start(next: { [weak self] sharedData in
+                guard let self, !self.didReconcileInitialTimeout, !self.rootPath.isEmpty else {
+                    return
+                }
+                self.didReconcileInitialTimeout = true
+                guard let manifest = YougramVaultStore.shared.loadManifest(rootPath: self.rootPath) else {
+                    return
+                }
                 let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.presentationPasscodeSettings]?.get(PresentationPasscodeSettings.self) ?? .defaultSettings
-                self?.cachedAppLockTimeout = settings.autolockTimeout
+                if manifest.autoLockTimeout == nil, manifest.unlockMode == .appPasscode, settings.autolockTimeout != nil {
+                    try? YougramVaultStore.shared.setAutoLockTimeout(settings.autolockTimeout, rootPath: self.rootPath)
+                } else if settings.autolockTimeout != manifest.autoLockTimeout {
+                    let targetTimeout = manifest.autoLockTimeout
+                    let _ = updatePresentationPasscodeSettingsInteractively(accountManager: sharedContext.accountManager, { current in
+                        return current.withUpdatedAutolockTimeout(targetTimeout)
+                    }).start()
+                }
             })
 
             self.settingsSyncDisposable = (sharedContext.accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.yougramSettings]))
@@ -196,8 +234,7 @@ final class YougramLocalEncryptionCoordinator {
     }
 
     private func effectiveAutoLockTimeout(manifest: YougramVaultManifest) -> Int32? {
-        let candidates = [manifest.autoLockTimeout, self.cachedAppLockTimeout].compactMap { $0 }
-        return candidates.min()
+        return manifest.autoLockTimeout
     }
 
     func handleWillResignActive() {
@@ -251,14 +288,16 @@ final class YougramLocalEncryptionCoordinator {
         self.didEnterBackgroundSinceActive = false
 
         var shouldLock = false
-        if let timeout = effectiveTimeout, let inactiveSince {
-            let elapsed = max(0.0, ProcessInfo.processInfo.systemUptime - inactiveSince)
+        if let timeout = effectiveTimeout {
             if timeout == 0 {
-                if wasBackgrounded || elapsed >= 2.0 {
+                if wasBackgrounded {
                     shouldLock = true
                 }
-            } else if elapsed >= TimeInterval(timeout) {
-                shouldLock = true
+            } else if let inactiveSince {
+                let elapsed = max(0.0, ProcessInfo.processInfo.systemUptime - inactiveSince)
+                if elapsed >= TimeInterval(timeout) {
+                    shouldLock = true
+                }
             }
         }
 

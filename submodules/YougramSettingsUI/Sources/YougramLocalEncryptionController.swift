@@ -105,6 +105,8 @@ private func autoLockLabel(_ timeout: Int32?, strings: PresentationStrings) -> S
     switch timeout {
     case 0:
         return strings.Yougram_Encryption_AutoLockImmediately
+    case 10:
+        return "If away for 10 seconds"
     case 60:
         return strings.Yougram_Encryption_AutoLock1Min
     case 300:
@@ -113,12 +115,20 @@ private func autoLockLabel(_ timeout: Int32?, strings: PresentationStrings) -> S
         return strings.Yougram_Encryption_AutoLock15Min
     case 3600:
         return strings.Yougram_Encryption_AutoLock1Hour
+    case 18000:
+        return strings.PasscodeSettings_AutoLock_IfAwayFor_5hours
     default:
         return "\(timeout)s"
     }
 }
 
-private func buildEncryptionEntries(manifest: YougramVaultManifest?, theme: PresentationTheme, strings: PresentationStrings) -> [EncryptionEntry] {
+private func buildEncryptionEntries(
+    manifest: YougramVaultManifest?,
+    hasAppPasscode: Bool,
+    scrambleKeypad: Bool,
+    theme: PresentationTheme,
+    strings: PresentationStrings
+) -> [EncryptionEntry] {
     var entries: [EncryptionEntry] = []
     var nextId: Int32 = 1
     var section: Int32 = 0
@@ -128,9 +138,16 @@ private func buildEncryptionEntries(manifest: YougramVaultManifest?, theme: Pres
         return v
     }
 
+    let passcodeStatusLabel = hasAppPasscode ? strings.Yougram_Encryption_On : strings.Yougram_Encryption_Off
+
     guard let manifest else {
         entries.append(.action(id: next(), section: section, title: strings.Yougram_Encryption_Enable, destructive: false, tag: "enable"))
         entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_StatusInfo))
+
+        section += 1
+        entries.append(.header(id: next(), section: section, text: strings.PasscodeSettings_Title.uppercased()))
+        entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("faceid", theme: theme), title: strings.PasscodeSettings_Title, label: passcodeStatusLabel, tag: "openPasscode"))
+        entries.append(.info(id: next(), section: section, text: "Local Encryption is optional. You can configure App Passcode & Face ID independently or link Local Encryption to your App Passcode."))
         return entries
     }
 
@@ -152,8 +169,10 @@ private func buildEncryptionEntries(manifest: YougramVaultManifest?, theme: Pres
         entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_DuressInfo))
     }
 
+    entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("lock.open", theme: theme), title: strings.PasscodeSettings_Title, label: passcodeStatusLabel, tag: "openPasscode"))
     entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("timer", theme: theme), title: strings.Yougram_Encryption_AutoLock, label: autoLockLabel(manifest.autoLockTimeout, strings: strings), tag: "autoLock"))
-    entries.append(.toggle(id: next(), section: section, icon: yougramIcon("circle.grid.3x3", theme: theme), title: strings.Yougram_Encryption_ScrambleKeypad, value: manifest.scrambledKeypad, tag: "scrambleKeypad"))
+    entries.append(.toggle(id: next(), section: section, icon: yougramIcon("circle.grid.3x3", theme: theme), title: strings.Yougram_Encryption_ScrambleKeypad, value: scrambleKeypad, tag: "scrambleKeypad"))
+    entries.append(.info(id: next(), section: section, text: "Auto-Lock and Scramble PIN settings are shared with App Passcode & Face ID so your lock timers never conflict."))
 
     section += 1
     entries.append(.action(id: next(), section: section, title: strings.Yougram_Encryption_LockNow, destructive: false, tag: "lockNow"))
@@ -174,8 +193,10 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
     let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (context.sharedContext.applicationBindings.containerPath + "/telegram-data")
 
     var pushControllerImpl: ((ViewController) -> Void)?
+    var replaceTopControllerImpl: ((ViewController) -> Void)?
     var presentImpl: ((ViewController) -> Void)?
     var presentNativeAlertImpl: ((UIAlertController) -> Void)?
+    var latestAppPasscodeTimeout: Int32? = 60 * 60
 
     let showToast: (String) -> Void = { text in
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
@@ -359,6 +380,10 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
                         passcodeSession: holder?.session,
                         rootPath: rootPath
                     )
+                    let targetTimeout = manifest.autoLockTimeout
+                    let _ = updatePresentationPasscodeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
+                        return current.withUpdatedAutolockTimeout(targetTimeout)
+                    }).start()
                     showToast(strings.Yougram_Encryption_EnabledToast)
                 } catch {
                     showAlert(nil, strings.Yougram_Encryption_MigrationFailed)
@@ -395,6 +420,17 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
         }
     }
 
+    let openPasscodeSettings = {
+        YougramLocalEncryptionHooks.openPasscodeOptions?(context) { controllerObj, replace in
+            guard let target = controllerObj as? ViewController else { return }
+            if replace {
+                replaceTopControllerImpl?(target)
+            } else {
+                pushControllerImpl?(target)
+            }
+        }
+    }
+
     let arguments = EncryptionArguments(
         performAction: { tag in
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
@@ -403,68 +439,91 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
 
             switch tag {
             case "enable":
+                let hasAppPasscode = (try? PasscodeCredentialStore.shared.protectionSettings())?.passcode != nil
+                let beginDedicatedEnable: () -> Void = {
+                    chooseSecretKind { kind in
+                        chooseExtensionsMode { allowExtensions in
+                            promptNewDedicatedSecret(strings.Yougram_Encryption_EnterNewSecret, kind) { secret in
+                                DispatchQueue.global(qos: .userInitiated).async {
+                                    do {
+                                        let scramble = YougramSettings.current.scramblePasscodeKeypad
+                                        let initialTimeout = hasAppPasscode ? latestAppPasscodeTimeout : (latestAppPasscodeTimeout ?? 300)
+                                        let prepared = try YougramVaultStore.shared.prepareDedicatedVault(
+                                            secret: secret,
+                                            kind: kind,
+                                            allowBackgroundExtensions: allowExtensions,
+                                            biometricsEnabled: false,
+                                            autoLockTimeout: initialTimeout,
+                                            scrambledKeypad: scramble
+                                        )
+                                        DispatchQueue.main.async {
+                                            startEnableMigration(prepared.masterKey, prepared.manifest, nil)
+                                        }
+                                    } catch {
+                                        DispatchQueue.main.async {
+                                            showAlert(nil, strings.Yougram_Encryption_MigrationFailed)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let beginAppPasscodeEnable: () -> Void = {
+                    guard (try? PasscodeCredentialStore.shared.protectionSettings())?.passcode != nil else {
+                        let setupAlert = textAlertController(
+                            context: context,
+                            title: strings.PasscodeSettings_Title,
+                            text: strings.Yougram_Encryption_NeedsAppPasscode,
+                            actions: [
+                                TextAlertAction(type: .genericAction, title: strings.Common_Cancel, action: {}),
+                                TextAlertAction(type: .defaultAction, title: strings.PasscodeSettings_TurnPasscodeOn, action: {
+                                    openPasscodeSettings()
+                                })
+                            ]
+                        )
+                        presentImpl?(setupAlert)
+                        return
+                    }
+                    chooseExtensionsMode { allowExtensions in
+                        promptAppPasscodeSession { session in
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                do {
+                                    let initialTimeout = latestAppPasscodeTimeout
+                                    let prepared = try YougramVaultStore.shared.prepareAppPasscodeVault(
+                                        session: session,
+                                        allowBackgroundExtensions: allowExtensions,
+                                        autoLockTimeout: initialTimeout,
+                                        scrambledKeypad: YougramSettings.current.scramblePasscodeKeypad
+                                    )
+                                    DispatchQueue.main.async {
+                                        startEnableMigration(prepared.masterKey, prepared.manifest, session)
+                                    }
+                                } catch {
+                                    session.invalidate()
+                                    DispatchQueue.main.async {
+                                        showAlert(nil, strings.Yougram_Encryption_MigrationFailed)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let sheet = ActionSheetController(presentationData: presentationData)
+                let appPasscodeItem = ActionSheetButtonItem(title: strings.Yougram_Encryption_AppPasscodeMethod, color: .accent, action: { [weak sheet] in
+                    sheet?.dismissAnimated()
+                    beginAppPasscodeEnable()
+                })
+                let dedicatedItem = ActionSheetButtonItem(title: strings.Yougram_Encryption_DedicatedMethod, color: .accent, action: { [weak sheet] in
+                    sheet?.dismissAnimated()
+                    beginDedicatedEnable()
+                })
+                let methodItems: [ActionSheetItem] = hasAppPasscode
+                    ? [ActionSheetTextItem(title: strings.Yougram_Encryption_ChooseUnlockMethod), appPasscodeItem, dedicatedItem]
+                    : [ActionSheetTextItem(title: strings.Yougram_Encryption_ChooseUnlockMethod), dedicatedItem, appPasscodeItem]
                 sheet.setItemGroups([
-                    ActionSheetItemGroup(items: [
-                        ActionSheetTextItem(title: strings.Yougram_Encryption_ChooseUnlockMethod),
-                        ActionSheetButtonItem(title: strings.Yougram_Encryption_DedicatedMethod, color: .accent, action: { [weak sheet] in
-                            sheet?.dismissAnimated()
-                            chooseSecretKind { kind in
-                                chooseExtensionsMode { allowExtensions in
-                                    promptNewDedicatedSecret(strings.Yougram_Encryption_EnterNewSecret, kind) { secret in
-                                        DispatchQueue.global(qos: .userInitiated).async {
-                                            do {
-                                                let scramble = YougramSettings.current.scramblePasscodeKeypad
-                                                let prepared = try YougramVaultStore.shared.prepareDedicatedVault(
-                                                    secret: secret,
-                                                    kind: kind,
-                                                    allowBackgroundExtensions: allowExtensions,
-                                                    biometricsEnabled: false,
-                                                    autoLockTimeout: 300,
-                                                    scrambledKeypad: scramble
-                                                )
-                                                DispatchQueue.main.async {
-                                                    startEnableMigration(prepared.masterKey, prepared.manifest, nil)
-                                                }
-                                            } catch {
-                                                DispatchQueue.main.async {
-                                                    showAlert(nil, strings.Yougram_Encryption_MigrationFailed)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }),
-                        ActionSheetButtonItem(title: strings.Yougram_Encryption_AppPasscodeMethod, color: .accent, action: { [weak sheet] in
-                            sheet?.dismissAnimated()
-                            guard (try? PasscodeCredentialStore.shared.protectionSettings())?.passcode != nil else {
-                                showAlert(nil, strings.Yougram_Encryption_NeedsAppPasscode)
-                                return
-                            }
-                            chooseExtensionsMode { allowExtensions in
-                                promptAppPasscodeSession { session in
-                                    DispatchQueue.global(qos: .userInitiated).async {
-                                        do {
-                                            let prepared = try YougramVaultStore.shared.prepareAppPasscodeVault(
-                                                session: session,
-                                                allowBackgroundExtensions: allowExtensions,
-                                                scrambledKeypad: YougramSettings.current.scramblePasscodeKeypad
-                                            )
-                                            DispatchQueue.main.async {
-                                                startEnableMigration(prepared.masterKey, prepared.manifest, session)
-                                            }
-                                        } catch {
-                                            session.invalidate()
-                                            DispatchQueue.main.async {
-                                                showAlert(nil, strings.Yougram_Encryption_MigrationFailed)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        })
-                    ]),
+                    ActionSheetItemGroup(items: methodItems),
                     ActionSheetItemGroup(items: [
                         ActionSheetButtonItem(title: strings.Common_Cancel, color: .accent, font: .bold, action: { [weak sheet] in
                             sheet?.dismissAnimated()
@@ -548,21 +607,31 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
                     }
                 }
 
+            case "openPasscode":
+                openPasscodeSettings()
+
             case "autoLock":
-                let options: [(String, Int32?)] = [
+                var options: [(String, Int32?)] = [
                     (strings.Yougram_Encryption_AutoLockImmediately, 0),
                     (strings.Yougram_Encryption_AutoLock1Min, 60),
                     (strings.Yougram_Encryption_AutoLock5Min, 300),
                     (strings.Yougram_Encryption_AutoLock15Min, 900),
                     (strings.Yougram_Encryption_AutoLock1Hour, 3600),
+                    (strings.PasscodeSettings_AutoLock_IfAwayFor_5hours, 18000),
                     (strings.Yougram_Encryption_AutoLockDisabled, nil)
                 ]
+                #if DEBUG
+                options.insert(("If away for 10 seconds", 10), at: 1)
+                #endif
                 let sheet = ActionSheetController(presentationData: presentationData)
                 sheet.setItemGroups([
                     ActionSheetItemGroup(items: options.map { title, value in
                         ActionSheetButtonItem(title: title, color: .accent, action: { [weak sheet] in
                             sheet?.dismissAnimated()
                             try? YougramVaultStore.shared.setAutoLockTimeout(value, rootPath: rootPath)
+                            let _ = updatePresentationPasscodeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
+                                return current.withUpdatedAutolockTimeout(value)
+                            }).start()
                         })
                     }),
                     ActionSheetItemGroup(items: [
@@ -724,17 +793,25 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
         }
     )
 
-    let stateSignal: Signal<(PresentationData, YougramVaultManifest?), NoError> = combineLatest(
+    let stateSignal: Signal<(PresentationData, YougramVaultManifest?, Bool, Int32?, Bool), NoError> = combineLatest(
         context.sharedContext.presentationData,
+        context.sharedContext.accountManager.accessChallengeData(),
+        context.sharedContext.accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.presentationPasscodeSettings])),
+        YougramSettings.updates,
         .single(()) |> then(YougramVaultStore.shared.stateChanges)
     )
-    |> map { presentationData, _ -> (PresentationData, YougramVaultManifest?) in
-        return (presentationData, YougramVaultStore.shared.loadManifest(rootPath: rootPath))
+    |> map { presentationData, accessChallengeView, sharedData, yougramSettings, _ -> (PresentationData, YougramVaultManifest?, Bool, Int32?, Bool) in
+        let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath)
+        let hasAppPasscode = accessChallengeView.data.isLockable
+        let passcodeSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.presentationPasscodeSettings]?.get(PresentationPasscodeSettings.self) ?? .defaultSettings
+        let scramble = yougramSettings.scramblePasscodeKeypad || (manifest?.scrambledKeypad ?? false)
+        return (presentationData, manifest, hasAppPasscode, passcodeSettings.autolockTimeout, scramble)
     }
 
     let signal = stateSignal
     |> deliverOnMainQueue
-    |> map { presentationData, manifest -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, manifest, hasAppPasscode, appPasscodeTimeout, scramble -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        latestAppPasscodeTimeout = appPasscodeTimeout
         let itemPresentation = ItemListPresentationData(presentationData)
         let controllerState = ItemListControllerState(
             presentationData: itemPresentation,
@@ -745,7 +822,13 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
         )
         let listState = ItemListNodeState(
             presentationData: itemPresentation,
-            entries: buildEncryptionEntries(manifest: manifest, theme: presentationData.theme, strings: presentationData.strings),
+            entries: buildEncryptionEntries(
+                manifest: manifest,
+                hasAppPasscode: hasAppPasscode,
+                scrambleKeypad: scramble,
+                theme: presentationData.theme,
+                strings: presentationData.strings
+            ),
             style: .blocks,
             animateChanges: true
         )
@@ -755,6 +838,9 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
     let controller = ItemListController(context: context, state: signal)
     pushControllerImpl = { [weak controller] c in
         controller?.push(c)
+    }
+    replaceTopControllerImpl = { [weak controller] c in
+        (controller?.navigationController as? NavigationController)?.replaceTopController(c, animated: true)
     }
     presentImpl = { [weak controller] c in
         controller?.present(c, in: .window(.root))

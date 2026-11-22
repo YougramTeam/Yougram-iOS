@@ -32,6 +32,8 @@ private struct PasscodeOptionsScreenState: Equatable {
     var canUseBiometrics = false
     var faceID = false
     var isUpdating = false
+    var localEncryptionEnabled = false
+    var scrambleKeypad = false
 
     var isReady: Bool {
         return self.data != nil && self.protectionLoaded
@@ -43,18 +45,22 @@ private func passcodeOptionsAutolockString(strings: PresentationStrings, timeout
         return strings.PasscodeSettings_AutoLock_Disabled
     }
     switch timeout {
+    case 0:
+        return strings.Yougram_Encryption_AutoLockImmediately
     case 10:
         return "If away for 10 seconds"
     case 60:
         return strings.PasscodeSettings_AutoLock_IfAwayFor_1minute
     case 5 * 60:
         return strings.PasscodeSettings_AutoLock_IfAwayFor_5minutes
+    case 15 * 60:
+        return strings.Yougram_Encryption_AutoLock15Min
     case 60 * 60:
         return strings.PasscodeSettings_AutoLock_IfAwayFor_1hour
     case 5 * 60 * 60:
         return strings.PasscodeSettings_AutoLock_IfAwayFor_5hours
     default:
-        return ""
+        return "\(timeout)s"
     }
 }
 
@@ -125,6 +131,20 @@ private final class PasscodeOptionsScreenModel {
         self.disposables.add((PasscodeCredentialStore.shared.changes
         |> deliverOnMainQueue).start(next: { [weak self] _ in
             self?.refreshProtection(reportError: false)
+        }))
+
+        let encryptionRootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+        self.disposables.add((combineLatest(
+            YougramSettings.updates,
+            .single(()) |> then(YougramVaultStore.shared.stateChanges)
+        ) |> deliverOnMainQueue).start(next: { [weak self] yougramSettings, _ in
+            guard let self, !self.isClosed else {
+                return
+            }
+            let manifest = YougramVaultStore.shared.loadManifest(rootPath: encryptionRootPath)
+            self.state.localEncryptionEnabled = manifest != nil
+            self.state.scrambleKeypad = yougramSettings.scramblePasscodeKeypad || (manifest?.scrambledKeypad ?? false)
+            self.updateState()
         }))
 
         let accountId = context.account.id
@@ -446,8 +466,15 @@ private final class PasscodeOptionsScreenModel {
             return
         }
         let generation = self.sessionState.generation
+        let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (self.context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+        let effectiveInitialTimeout: Int32?
+        if let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath) {
+            effectiveInitialTimeout = manifest.autoLockTimeout
+        } else {
+            effectiveInitialTimeout = 60 * 60
+        }
         weak var setupController: ViewController?
-        let controller = applicationPasscodeSetupController(context: self.context, session: session, change: session != nil, ownsAuthorizationSession: false, preferredModalWidth: 480.0, allowFourDigitPasscode: self.allowFourDigitPasscode, settingsSessionCompleted: { [weak self] session in
+        let controller = applicationPasscodeSetupController(context: self.context, session: session, change: session != nil, ownsAuthorizationSession: false, preferredModalWidth: 480.0, initialAutolockTimeout: effectiveInitialTimeout, allowFourDigitPasscode: self.allowFourDigitPasscode, settingsSessionCompleted: { [weak self] session in
             guard let self, self.sessionState.accepts(operation: operation) else {
                 session.invalidate()
                 return
@@ -534,6 +561,10 @@ private final class PasscodeOptionsScreenModel {
         let _ = updatePresentationPasscodeSettingsInteractively(accountManager: self.context.sharedContext.accountManager, { current in
             return current.withUpdatedAutolockTimeout(value)
         }).start()
+        let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (self.context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+        if YougramVaultStore.shared.isEnabled(rootPath: rootPath) {
+            try? YougramVaultStore.shared.setAutoLockTimeout(value, rootPath: rootPath)
+        }
     }
 
     func changeTelegramBiometrics(_ value: Bool) {
@@ -546,6 +577,32 @@ private final class PasscodeOptionsScreenModel {
         let _ = updatePresentationPasscodeSettingsInteractively(accountManager: self.context.sharedContext.accountManager, { current in
             return current.withUpdatedEnableBiometrics(value)
         }).start()
+    }
+
+    func changeScrambleKeypad(_ value: Bool) {
+        guard !self.isClosed else {
+            return
+        }
+        self.state.scrambleKeypad = value
+        self.updateState()
+        let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (self.context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+        if YougramVaultStore.shared.isEnabled(rootPath: rootPath) {
+            try? YougramVaultStore.shared.setScrambledKeypad(value, rootPath: rootPath)
+        }
+        let _ = updateYougramSettingsInteractively(accountManager: self.context.sharedContext.accountManager, { settings in
+            var updated = settings
+            updated.scramblePasscodeKeypad = value
+            return updated
+        }).start()
+    }
+
+    func openLocalEncryption() {
+        guard !self.isClosed else {
+            return
+        }
+        if let controller = YougramLocalEncryptionHooks.makeLocalEncryptionController?(self.context) as? ViewController {
+            self.controller?.push(controller)
+        }
     }
 }
 
@@ -568,6 +625,7 @@ private final class PasscodeOptionsScreenComponent: Component {
         private let scrollView: UIScrollView
         private let passcodeSection = ComponentView<Empty>()
         private let telegramSection = ComponentView<Empty>()
+        private let localEncryptionSection = ComponentView<Empty>()
         private let walletSection = ComponentView<Empty>()
         private let stateDisposable = MetaDisposable()
 
@@ -614,15 +672,13 @@ private final class PasscodeOptionsScreenComponent: Component {
             }
             let presentationData = component.model.presentationData
             let currentTimeout = component.model.state.data?.presentationSettings.autolockTimeout
-            var values: [Int32] = [0, 60, 5 * 60, 60 * 60, 5 * 60 * 60]
+            var values: [Int32?] = [0, 60, 5 * 60, 15 * 60, 60 * 60, 5 * 60 * 60, nil]
             #if DEBUG
-            values.append(10)
-            values.sort()
+            values.insert(10, at: 1)
             #endif
 
             var items: [ContextMenuItem] = []
-            for value in values {
-                let timeout: Int32? = value == 0 ? nil : value
+            for timeout in values {
                 items.append(.action(ContextMenuActionItem(text: passcodeOptionsAutolockString(strings: presentationData.strings, timeout: timeout), icon: { theme in
                     if currentTimeout == timeout {
                         return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Check"), color: theme.contextMenu.primaryColor)
@@ -880,8 +936,55 @@ private final class PasscodeOptionsScreenComponent: Component {
                             action: nil
                         ))))
                     }
+                    telegramItems.append(AnyComponentWithIdentity(id: "scrambleKeypad", component: AnyComponent(ListActionItemComponent(
+                        theme: theme,
+                        style: .glass,
+                        title: AnyComponent(MultilineTextComponent(
+                            text: .plain(NSAttributedString(
+                                string: strings.Yougram_Encryption_ScrambleKeypad,
+                                font: actionFont,
+                                textColor: theme.list.itemPrimaryTextColor
+                            )),
+                            maximumNumberOfLines: 0
+                        )),
+                        accessory: .toggle(ListActionItemComponent.Toggle(style: .regular, isOn: screenState.scrambleKeypad, action: { [weak self] value in
+                            self?.component?.model.changeScrambleKeypad(value)
+                        })),
+                        action: nil
+                    ))))
                     updateSection(self.telegramSection, header: strings.PasscodeSettings_LockTelegram.uppercased(), footer: nil, items: telegramItems)
+                } else {
+                    self.telegramSection.view?.removeFromSuperview()
+                }
 
+                var localEncryptionItems: [AnyComponentWithIdentity<Empty>] = []
+                localEncryptionItems.append(AnyComponentWithIdentity(id: "localEncryption", component: AnyComponent(ListActionItemComponent(
+                    theme: theme,
+                    style: .glass,
+                    title: AnyComponent(MultilineTextComponent(
+                        text: .plain(NSAttributedString(
+                            string: strings.Yougram_Privacy_LocalEncryption,
+                            font: actionFont,
+                            textColor: theme.list.itemPrimaryTextColor
+                        )),
+                        maximumNumberOfLines: 0
+                    )),
+                    icon: ListActionItemComponent.Icon(component: AnyComponentWithIdentity(id: "status", component: AnyComponent(MultilineTextComponent(
+                        text: .plain(NSAttributedString(
+                            string: screenState.localEncryptionEnabled ? strings.Yougram_Encryption_On : strings.Yougram_Encryption_Off,
+                            font: actionFont,
+                            textColor: theme.list.itemSecondaryTextColor
+                        )),
+                        maximumNumberOfLines: 1
+                    )))),
+                    accessory: .arrow,
+                    action: { [weak self] _ in
+                        self?.component?.model.openLocalEncryption()
+                    }
+                ))))
+                updateSection(self.localEncryptionSection, header: strings.Yougram_Encryption_Title.uppercased(), footer: "Optional local encryption for chats, media, and databases. Auto-Lock and Scramble PIN settings are shared across App Passcode and Local Encryption.", items: localEncryptionItems)
+
+                if hasPasscode {
                     if WalletConfiguration.with(appConfiguration: component.model.context.currentAppConfiguration.with { $0 }).isAvailable {
                         let protectionEnabled = screenState.protection?.enabled == true
                         let controlsEnabled = !screenState.protectionUnavailable && !screenState.isUpdating
@@ -932,7 +1035,6 @@ private final class PasscodeOptionsScreenComponent: Component {
                         self.walletSection.view?.removeFromSuperview()
                     }
                 } else {
-                    self.telegramSection.view?.removeFromSuperview()
                     self.walletSection.view?.removeFromSuperview()
                 }
             }

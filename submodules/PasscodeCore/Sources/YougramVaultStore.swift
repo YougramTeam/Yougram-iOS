@@ -210,6 +210,8 @@ public enum YougramLocalEncryptionHooks {
     public static var lockNow: (() -> Void)?
     public static var handleAppLockTriggered: ((_ isManualLock: Bool) -> Bool)?
     public static var didUnlockFromVault: (() -> Void)?
+    public static var makeLocalEncryptionController: ((_ context: AnyObject) -> AnyObject?)?
+    public static var openPasscodeOptions: ((_ context: AnyObject, _ navigate: @escaping (_ controller: AnyObject, _ replace: Bool) -> Void) -> Void)?
 }
 
 @available(macOS 10.15, *)
@@ -371,6 +373,7 @@ public final class YougramVaultStore: @unchecked Sendable {
     public func prepareAppPasscodeVault(
         session: PasscodeSession,
         allowBackgroundExtensions: Bool,
+        autoLockTimeout: Int32? = nil,
         scrambledKeypad: Bool = false,
         existingMasterKey: Data? = nil
     ) throws -> (masterKey: Data, manifest: YougramVaultManifest) {
@@ -404,7 +407,7 @@ public final class YougramVaultStore: @unchecked Sendable {
             pepperVersion: 1,
             allowBackgroundExtensions: allowBackgroundExtensions,
             biometricsEnabled: false,
-            autoLockTimeout: nil,
+            autoLockTimeout: autoLockTimeout,
             scrambledKeypad: scrambledKeypad,
             migrationState: .enabling
         )
@@ -734,7 +737,6 @@ public final class YougramVaultStore: @unchecked Sendable {
         manifest.iterations = Self.defaultIterationsV2
         manifest.wrappedMasterKey = wrapped
         manifest.biometricsEnabled = false
-        manifest.autoLockTimeout = nil
         manifest.scrambledKeypad = scrambledKeypad
         manifest.duressSalt = nil
         manifest.duressHash = nil

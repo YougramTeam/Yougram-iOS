@@ -7109,10 +7109,19 @@ private final class ChatListLocationContext {
             return lhs == rhs
         })
         
-        let passcode = context.sharedContext.accountManager.accessChallengeData()
-        |> map { view -> (Bool, Bool) in
+        let localEncryptionChanged = Signal<Void, NoError> { subscriber in
+            subscriber.putNext(())
+            let observer = NotificationCenter.default.addObserver(forName: YougramCoreOptions.localEncryptionDidChangeNotification, object: nil, queue: nil) { _ in
+                subscriber.putNext(())
+            }
+            return ActionDisposable {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+        let passcode = combineLatest(context.sharedContext.accountManager.accessChallengeData(), localEncryptionChanged)
+        |> map { view, _ -> (Bool, Bool) in
             let data = view.data
-            return (data.isLockable, false)
+            return (data.isLockable || YougramCoreOptions.localEncryptionEnabled, false)
         }
         
         let peerStatus: Signal<NetworkStatusTitle.Status?, NoError>

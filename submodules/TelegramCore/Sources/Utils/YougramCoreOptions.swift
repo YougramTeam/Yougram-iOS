@@ -8,6 +8,7 @@ import Foundation
 /// extensions and tests see.
 public enum YougramCoreOptions {
     public static let ghostModeDidChangeNotification = Notification.Name("YougramCoreOptionsGhostModeDidChange")
+    public static let localEncryptionDidChangeNotification = Notification.Name("YougramCoreOptionsLocalEncryptionDidChange")
 
     private static let lock = NSLock()
     private static var _keepChatsAfterRemoval = false
@@ -28,8 +29,12 @@ public enum YougramCoreOptions {
         }
         set {
             lock.lock()
+            let changed = _localEncryptionEnabled != newValue
             _localEncryptionEnabled = newValue
             lock.unlock()
+            if changed {
+                NotificationCenter.default.post(name: Self.localEncryptionDidChangeNotification, object: nil)
+            }
         }
     }
 
