@@ -17,8 +17,8 @@ public enum YougramLocalEncryptionBridge {
         return PostboxLocalEncryption.isActive
     }
 
-    public static func activate(masterKey: Data) {
-        let _ = PostboxLocalEncryption.activate(masterKey: masterKey)
+    public static func activate(masterKey: Data, version: Int = 2) {
+        let _ = PostboxLocalEncryption.activate(masterKey: masterKey, version: version)
         YougramCoreOptions.localEncryptionEnabled = true
     }
 
@@ -47,18 +47,25 @@ public enum YougramLocalEncryptionBridge {
         TempBox.shared.reconfigureBasePath(basePath)
     }
 
-    public static func wipeAuxiliaryPlaintextArtifacts(rootPath: String, appGroupPath: String? = nil) {
+    public static func wipeAuxiliaryPlaintextArtifacts(rootPath: String, appGroupPath: String? = nil, preserveExtensionMetadata: Bool = false) {
         let fm = FileManager.default
-        let rootArtifacts = [
+        var rootArtifacts = [
             "logs",
             "spotlight-contacts",
             "animation-cache",
             "network-stats",
             "network-usage",
+            "share",
             "temp",
             ".tempkey",
             ".tempkey.lock"
         ]
+        if !preserveExtensionMetadata {
+            rootArtifacts.append(contentsOf: [
+                "widgetPresentationData.json",
+                "notificationsPresentationData.json"
+            ])
+        }
         var bases: [String] = [rootPath]
         if let appGroupPath, appGroupPath != rootPath {
             bases.append(appGroupPath)
@@ -72,10 +79,18 @@ public enum YougramLocalEncryptionBridge {
             }
         }
 
+        let accountsMetaPath = rootPath + "/accounts-metadata"
+        for metaRel in ["spotlight", "widget-data"] {
+            let metaArtifactPath = accountsMetaPath + "/" + metaRel
+            if fm.fileExists(atPath: metaArtifactPath) {
+                let _ = try? fm.removeItem(atPath: metaArtifactPath)
+            }
+        }
+
         if let contents = try? fm.contentsOfDirectory(atPath: rootPath) {
             for entry in contents where entry.hasPrefix("account-") {
                 let accountPath = rootPath + "/" + entry
-                for rel in ["notificationsKey", "network-stats", "network-usage", "logs"] {
+                for rel in ["notificationsKey", "network-stats", "network-usage", "logs", "postbox/media/animation-cache"] {
                     let path = accountPath + "/" + rel
                     if fm.fileExists(atPath: path) {
                         let _ = try? fm.removeItem(atPath: path)
@@ -83,6 +98,60 @@ public enum YougramLocalEncryptionBridge {
                 }
             }
         }
+    }
+
+    public static func checkpointAndClearLiveDatabases(
+        accountManager: AccountManager<TelegramAccountManagerTypes>,
+        accounts: [Account],
+        unauthorizedAccount: UnauthorizedAccount?,
+        completion: @escaping () -> Void
+    ) {
+        var postboxes: [Postbox] = accounts.map { $0.postbox }
+        if let unauthorizedAccount {
+            postboxes.append(unauthorizedAccount.postbox)
+        }
+
+        let pauseGroup = DispatchGroup()
+        pauseGroup.enter()
+        accountManager.setCanBeginTransactions(false) {
+            pauseGroup.leave()
+        }
+        for postbox in postboxes {
+            pauseGroup.enter()
+            postbox.setCanBeginTransactions(false) {
+                pauseGroup.leave()
+            }
+        }
+
+        pauseGroup.notify(queue: DispatchQueue.global(qos: .userInitiated)) {
+            let flushGroup = DispatchGroup()
+            flushGroup.enter()
+            accountManager.checkpointAndClearCaches {
+                flushGroup.leave()
+            }
+            for postbox in postboxes {
+                flushGroup.enter()
+                postbox.checkpointAndClearCaches {
+                    flushGroup.leave()
+                }
+            }
+            flushGroup.notify(queue: DispatchQueue.main) {
+                self.purgeEphemeralCache()
+                completion()
+            }
+        }
+    }
+
+    public static func resumeLiveDatabases(
+        accountManager: AccountManager<TelegramAccountManagerTypes>,
+        accounts: [Account],
+        unauthorizedAccount: UnauthorizedAccount?
+    ) {
+        accountManager.setCanBeginTransactions(true)
+        for account in accounts {
+            account.postbox.setCanBeginTransactions(true)
+        }
+        unauthorizedAccount?.postbox.setCanBeginTransactions(true)
     }
 
     private static func accountDirectories(in rootPath: String) -> [String] {
@@ -140,13 +209,14 @@ public enum YougramLocalEncryptionBridge {
         rootPath: String,
         encrypt: Bool,
         masterKey: Data,
+        vaultVersion: Int = 2,
         fallbackDeviceParameters: ValueBoxEncryptionParameters?,
         progress: ((Float) -> Void)? = nil
     ) throws {
         if !encrypt && fallbackDeviceParameters == nil {
             throw YougramLocalEncryptionError.invalidKey
         }
-        let keys = YougramVaultKeyMaterial(masterKey: masterKey)
+        let keys = YougramVaultKeyMaterial(masterKey: masterKey, version: vaultVersion)
         defer { keys.invalidate() }
 
         let accountDirs = self.accountDirectories(in: rootPath)
@@ -186,13 +256,14 @@ public enum YougramLocalEncryptionBridge {
         activePostboxes: [(basePath: String, postbox: Postbox)],
         encrypt: Bool,
         masterKey: Data,
+        vaultVersion: Int = 2,
         fallbackDeviceParameters: ValueBoxEncryptionParameters?,
         progress: ((Float) -> Void)? = nil
     ) throws {
         if !encrypt && fallbackDeviceParameters == nil {
             throw YougramLocalEncryptionError.invalidKey
         }
-        let keys = YougramVaultKeyMaterial(masterKey: masterKey)
+        let keys = YougramVaultKeyMaterial(masterKey: masterKey, version: vaultVersion)
         defer { keys.invalidate() }
 
         let activePaths = Set(activePostboxes.map { URL(fileURLWithPath: $0.basePath).standardizedFileURL.path })
@@ -215,7 +286,7 @@ public enum YougramLocalEncryptionBridge {
                 progress?(baseOffset + (0.25 + p * 0.75) * span)
             }
             if encrypt {
-                for rel in ["notificationsKey", "network-stats", "network-usage", "logs"] {
+                for rel in ["notificationsKey", "network-stats", "network-usage", "logs", "postbox/media/animation-cache"] {
                     let _ = try? FileManager.default.removeItem(atPath: item.basePath + "/" + rel)
                 }
             }
@@ -235,7 +306,7 @@ public enum YougramLocalEncryptionBridge {
         }
 
         if encrypt {
-            self.activate(masterKey: masterKey)
+            self.activate(masterKey: masterKey, version: vaultVersion)
             self.reconfigureSharedTempBox(basePath: self.ephemeralTempBoxBasePath())
             self.wipeAuxiliaryPlaintextArtifacts(rootPath: rootPath, appGroupPath: nil)
         } else {
@@ -261,6 +332,7 @@ public enum YougramLocalEncryptionBridge {
         rootPath: String,
         encrypt: Bool,
         masterKey: Data,
+        vaultVersion: Int = 2,
         deviceKeyData: Data,
         deviceSaltData: Data,
         progress: ((Float) -> Void)? = nil
@@ -270,6 +342,7 @@ public enum YougramLocalEncryptionBridge {
             rootPath: rootPath,
             encrypt: encrypt,
             masterKey: masterKey,
+            vaultVersion: vaultVersion,
             fallbackDeviceParameters: fallback,
             progress: progress
         )
@@ -282,6 +355,7 @@ public enum YougramLocalEncryptionBridge {
         unauthorizedAccount: UnauthorizedAccount?,
         encrypt: Bool,
         masterKey: Data,
+        vaultVersion: Int = 2,
         deviceKeyData: Data,
         deviceSaltData: Data,
         progress: ((Float) -> Void)? = nil,
@@ -314,6 +388,7 @@ public enum YougramLocalEncryptionBridge {
                     activePostboxes: postboxes,
                     encrypt: encrypt,
                     masterKey: masterKey,
+                    vaultVersion: vaultVersion,
                     fallbackDeviceParameters: fallback,
                     progress: progress
                 )

@@ -109,7 +109,7 @@ public enum YougramExtensionKeyPair {
 
 @available(macOS 10.15, *)
 public func resolveExtensionEncryptionParameters(rootPath: String) -> YougramExtensionVaultAccess {
-    guard YougramVaultStore.shared.isEnabled(rootPath: rootPath) else {
+    guard let manifest = YougramVaultStore.shared.loadManifest(rootPath: rootPath) else {
         return .disabled
     }
     if let masterKey = YougramVaultStore.shared.unlockForExtension(rootPath: rootPath) {
@@ -119,7 +119,7 @@ public func resolveExtensionEncryptionParameters(rootPath: String) -> YougramExt
                 mutableKey.resetBytes(in: 0 ..< mutableKey.count)
             }
         }
-        YougramLocalEncryptionBridge.activate(masterKey: mutableKey)
+        YougramLocalEncryptionBridge.activate(masterKey: mutableKey, version: manifest.version)
         if let params = YougramLocalEncryptionBridge.activePostboxEncryptionParameters() {
             return .unlocked(params)
         }

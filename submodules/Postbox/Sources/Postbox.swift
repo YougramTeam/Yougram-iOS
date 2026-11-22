@@ -4711,6 +4711,13 @@ final class PostboxImpl {
             }
         }).start()
     }
+
+    fileprivate func checkpointAndClearCachesNow() {
+        for table in self.tables {
+            table.clearMemoryCache()
+        }
+        (self.valueBox as? SqliteValueBox)?.checkpointAndPurgeMemory()
+    }
     
     public func optimizeStorage() -> Signal<Never, NoError> {
         return Signal { subscriber in
@@ -5451,6 +5458,18 @@ public class Postbox {
     public func clearCaches() {
         self.impl.with { impl in
             impl.clearCaches()
+        }
+    }
+
+    public func checkpointAndClearCaches(completion: @escaping () -> Void = {}) {
+        let mediaBox = self.mediaBox
+        self.impl.with { impl in
+            impl.checkpointAndClearCachesNow()
+            mediaBox.storageBox.checkpointAndClearCaches {
+                mediaBox.cacheStorageBox.checkpointAndClearCaches {
+                    completion()
+                }
+            }
         }
     }
 

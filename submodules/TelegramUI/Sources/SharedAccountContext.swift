@@ -20,6 +20,7 @@ import ChatListUI
 import PeerInfoUI
 import SettingsUI
 import PasscodeUI
+import PasscodeCore
 import UrlHandling
 import LegacyMediaPickerUI
 import LegacyComponents
@@ -587,8 +588,13 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || settings.reduceGlass
             // Mirrors read by LegacyComponents (TGMediaEditingContext, TGMediaAssetsController), which cannot
             // see YougramSettings.
-            UserDefaults.standard.set(settings.sendHDPhotos, forKey: "yougram.sendHDPhotos")
-            UserDefaults.standard.set(settings.hdPhotosFromClipboard, forKey: "yougram.hdPhotosFromClipboard")
+            if YougramLocalEncryptionBridge.isActive {
+                UserDefaults.standard.removeObject(forKey: "yougram.sendHDPhotos")
+                UserDefaults.standard.removeObject(forKey: "yougram.hdPhotosFromClipboard")
+            } else {
+                UserDefaults.standard.set(settings.sendHDPhotos, forKey: "yougram.sendHDPhotos")
+                UserDefaults.standard.set(settings.hdPhotosFromClipboard, forKey: "yougram.hdPhotosFromClipboard")
+            }
         })
 
         let _ = self.contactDataManager?.personNameDisplayOrder().start(next: { order in
@@ -1126,10 +1132,17 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         self.updateNotificationTokensRegistration()
         
         if applicationBindings.isMainApp {
-            self.widgetDataContext = WidgetDataContext(basePath: self.basePath, inForeground: self.applicationBindings.applicationInForeground, activeAccounts: self.activeAccountContexts
-            |> map { _, accounts, _ in
-                return accounts.map { $0.1.account }
-            }, presentationData: self.presentationData, appLockContext: self.appLockContext as! AppLockContextImpl)
+            let allowExtensions = !YougramLocalEncryptionBridge.isActive || (YougramVaultStore.shared.loadManifest(rootPath: rootPath)?.allowBackgroundExtensions == true)
+            if allowExtensions {
+                self.widgetDataContext = WidgetDataContext(basePath: self.basePath, inForeground: self.applicationBindings.applicationInForeground, activeAccounts: self.activeAccountContexts
+                |> map { _, accounts, _ in
+                    return accounts.map { $0.1.account }
+                }, presentationData: self.presentationData, appLockContext: self.appLockContext as! AppLockContextImpl)
+            } else {
+                self.widgetDataContext = nil
+                let _ = try? FileManager.default.removeItem(atPath: self.basePath + "/widgetPresentationData.json")
+                let _ = try? FileManager.default.removeItem(atPath: self.basePath + "/notificationsPresentationData.json")
+            }
             
             let enableSpotlight = accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.intentsSettings]))
             |> map { sharedData -> Bool in

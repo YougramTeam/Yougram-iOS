@@ -1808,26 +1808,47 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 guard let self, let unlockVC = self.prelaunchUnlockController else {
                     return
                 }
-                unlockVC.willMove(toParent: nil)
-                unlockVC.view.removeFromSuperview()
-                unlockVC.removeFromParent()
                 self.prelaunchUnlockController = nil
+                UIView.animate(withDuration: 0.22, delay: 0.0, options: [.curveEaseOut], animations: {
+                    unlockVC.view.alpha = 0.0
+                    unlockVC.view.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
+                }, completion: { _ in
+                    unlockVC.willMove(toParent: nil)
+                    unlockVC.view.removeFromSuperview()
+                    unlockVC.removeFromParent()
+                })
             }
             let unlockController = YougramVaultUnlockController(
                 rootPath: rootPath,
                 appGroupPath: appGroupUrl.path,
                 manifest: manifest,
-                onUnlocked: { [weak self] masterKey in
+                initialPhase: .locked,
+                onUnlocked: { [weak self] masterKey, unlockVC in
                     guard let self else { return }
-                    dismissUnlockGate()
                     YougramLocalEncryptionCoordinator.shared.completePendingMigrationIfNeeded(
                         rootPath: rootPath,
                         masterKey: masterKey,
                         baseAppBundleId: baseAppBundleId,
-                        window: self.window
+                        window: self.window,
+                        unlockController: unlockVC
                     ) {
+                        var didFinishGate = false
+                        let finishGate: () -> Void = {
+                            guard !didFinishGate else { return }
+                            didFinishGate = true
+                            unlockVC.updateDecryptionProgress(1.0)
+                            unlockVC.completeDecryptionAndDismiss {
+                                dismissUnlockGate()
+                            }
+                        }
+
+                        unlockVC.updateDecryptionProgress(0.72)
                         if let vaultEncryptionParameters = YougramLocalEncryptionBridge.activePostboxEncryptionParameters() {
-                            YougramLocalEncryptionBridge.wipeAuxiliaryPlaintextArtifacts(rootPath: rootPath, appGroupPath: appGroupUrl.path)
+                            YougramLocalEncryptionBridge.wipeAuxiliaryPlaintextArtifacts(
+                                rootPath: rootPath,
+                                appGroupPath: appGroupUrl.path,
+                                preserveExtensionMetadata: manifest.allowBackgroundExtensions
+                            )
                             YougramLocalEncryptionCoordinator.purgeSystemCachesAndIndexes()
                             continueLaunch(vaultEncryptionParameters)
                         } else {
@@ -1839,6 +1860,26 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                             )
                             TempBox.shared.reconfigureBasePath(rootPath)
                             continueLaunch(standardParameters)
+                        }
+
+                        if let rootVC = self.window?.rootViewController {
+                            rootVC.view.bringSubviewToFront(unlockVC.view)
+                        }
+
+                        let _ = (self.sharedContextPromise.get()
+                        |> take(1)
+                        |> deliverOnMainQueue).start(next: { sharedApplicationContext in
+                            guard !didFinishGate else { return }
+                            unlockVC.updateDecryptionProgress(0.88)
+                            let _ = (sharedApplicationContext.sharedContext.activeAccountContexts
+                            |> take(1)
+                            |> deliverOnMainQueue).start(next: { _ in
+                                finishGate()
+                            })
+                        })
+
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            finishGate()
                         }
                     }
                 },
@@ -1860,6 +1901,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 rootVC.addChild(unlockController)
                 unlockController.view.frame = rootVC.view.bounds
                 unlockController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                unlockController.view.layer.zPosition = 10000
                 rootVC.view.addSubview(unlockController.view)
                 unlockController.didMove(toParent: rootVC)
             }
@@ -2172,6 +2214,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
 
     func handleWillResignActive() {
+        YougramLocalEncryptionCoordinator.shared.handleWillResignActive()
         self.isActiveValue = false
         self.isActivePromise.set(false)
         self.clearNotificationsManager?.commitNow()

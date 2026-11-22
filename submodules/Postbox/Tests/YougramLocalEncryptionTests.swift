@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 import SwiftSignalKit
 import sqlcipher
@@ -331,5 +332,44 @@ final class YougramLocalEncryptionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: mediaDir + "/" + resourceId.stringRepresentation))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: mediaDir + "/" + resourceId.stringRepresentation)), resourcePayload)
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: plainRepPath)), repPayload)
+    }
+
+    func testV2KeySeparationCascadeBlobAndChunkedHeader() throws {
+        let master = self.makeMasterKey(fill: 0x61)
+        let v2 = YougramVaultKeyMaterial(masterKey: master, version: 2)
+        let v1 = YougramVaultKeyMaterial(masterKey: master, version: 1)
+        defer {
+            v2.invalidate()
+            v1.invalidate()
+        }
+
+        XCTAssertEqual(v2.version, 2)
+        XCTAssertEqual(v1.version, 1)
+        XCTAssertNotEqual(v2.postboxDatabaseParameters.key.data, v1.postboxDatabaseParameters.key.data)
+        XCTAssertNotEqual(v2.mediaKey, v1.mediaKey)
+        XCTAssertNotEqual(v2.sharedMediaKey, v2.mediaKey)
+
+        // YGE2 dual-cipher cascade roundtrip
+        let secret = Data("dual-cipher-cascade-payload".utf8)
+        let sealedV2 = try YougramEncryptedBlob.seal(secret, key: v2.atomicStateKey, aad: "ygas1")
+        XCTAssertEqual(sealedV2.prefix(4), YougramEncryptedBlob.magicV2)
+        XCTAssertEqual(try YougramEncryptedBlob.open(sealedV2, key: v2.atomicStateKey, aad: "ygas1"), secret)
+
+        // Legacy YGE1 backward-compatibility open
+        let nonce = AES.GCM.Nonce()
+        let legacyCombined = try AES.GCM.seal(secret, using: SymmetricKey(data: v1.atomicStateKey), nonce: nonce, authenticating: Data("ygas1".utf8)).combined!
+        var legacyBlob = YougramEncryptedBlob.magic
+        legacyBlob.append(legacyCombined)
+        XCTAssertTrue(YougramEncryptedBlob.isEncrypted(legacyBlob))
+        XCTAssertEqual(try YougramEncryptedBlob.open(legacyBlob, key: v1.atomicStateKey, aad: "ygas1"), secret)
+
+        // YGCF v2 header check
+        let path = self.tempRoot + "/v2check.ygcf"
+        let mediaData = Data(repeating: 0xAB, count: 1024)
+        try YougramChunkedFileCrypto.encryptData(mediaData, originalFileName: "v2-name", toPath: path, keys: v2)
+        let header = YougramChunkedFileCrypto.readHeader(atPath: path, keys: v2)
+        XCTAssertEqual(header?.formatVersion, 2)
+        XCTAssertEqual(header?.tagSize, 32)
+        XCTAssertEqual(try YougramChunkedFileCrypto.decryptData(fromPath: path, keys: v2), mediaData)
     }
 }

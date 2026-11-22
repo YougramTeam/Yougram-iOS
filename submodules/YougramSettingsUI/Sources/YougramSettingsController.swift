@@ -493,6 +493,12 @@ private func yougramScreenController(context: AccountContext, screen: YougramScr
         if key == \.hideBlockedUsersMessages && value == true {
             let _ = context.engine.privacy.yougramRefreshBlockedPeers().startStandalone()
         }
+        if key == \.scramblePasscodeKeypad {
+            let rootPath = YougramLocalEncryptionHooks.currentRootPath?() ?? (context.sharedContext.applicationBindings.containerPath + "/telegram-data")
+            if YougramVaultStore.shared.isEnabled(rootPath: rootPath) {
+                try? YougramVaultStore.shared.setScrambledKeypad(value, rootPath: rootPath)
+            }
+        }
         if requiresRestart {
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
             presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: presentationData.strings.Yougram_Settings_RestartNotice, timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }))

@@ -134,22 +134,29 @@ private func buildEncryptionEntries(manifest: YougramVaultManifest?, theme: Pres
         return entries
     }
 
-    entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_StatusInfo))
+    let statusText: String
+    if manifest.version >= 2 || manifest.kdfVersion >= 2 {
+        statusText = strings.Yougram_Encryption_StatusInfo + "\n\nVault v2 active: AES-256-GCM + ChaCha20-Poly1305 cascade, 16 MB Balloon-SHA512 + PBKDF2-SHA512, Secure Enclave hardware key."
+    } else {
+        statusText = strings.Yougram_Encryption_StatusInfo
+    }
+    entries.append(.info(id: next(), section: section, text: statusText))
 
     section += 1
     entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("key", theme: theme), title: strings.Yougram_Encryption_UnlockMethod, label: unlockMethodLabel(manifest.unlockMode, strings: strings), tag: "unlockMethod"))
     if case .dedicated = manifest.unlockMode {
         entries.append(.action(id: next(), section: section, title: strings.Yougram_Encryption_ChangeSecret, destructive: false, tag: "changeSecret"))
         entries.append(.toggle(id: next(), section: section, icon: yougramIcon("faceid", theme: theme), title: strings.Yougram_Encryption_FaceId, value: manifest.biometricsEnabled, tag: "biometrics"))
-        entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("timer", theme: theme), title: strings.Yougram_Encryption_AutoLock, label: autoLockLabel(manifest.autoLockTimeout, strings: strings), tag: "autoLock"))
-        entries.append(.toggle(id: next(), section: section, icon: yougramIcon("circle.grid.3x3", theme: theme), title: strings.Yougram_Encryption_ScrambleKeypad, value: manifest.scrambledKeypad, tag: "scrambleKeypad"))
         let duressLabel = (manifest.duressHash != nil) ? strings.Yougram_Encryption_DuressSet : strings.Yougram_Encryption_DuressOff
         entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("flame", theme: theme, destructive: true), title: strings.Yougram_Encryption_DedicatedDuress, label: duressLabel, tag: "duress"))
         entries.append(.info(id: next(), section: section, text: strings.Yougram_Encryption_DuressInfo))
-
-        section += 1
-        entries.append(.action(id: next(), section: section, title: strings.Yougram_Encryption_LockNow, destructive: false, tag: "lockNow"))
     }
+
+    entries.append(.disclosure(id: next(), section: section, icon: yougramIcon("timer", theme: theme), title: strings.Yougram_Encryption_AutoLock, label: autoLockLabel(manifest.autoLockTimeout, strings: strings), tag: "autoLock"))
+    entries.append(.toggle(id: next(), section: section, icon: yougramIcon("circle.grid.3x3", theme: theme), title: strings.Yougram_Encryption_ScrambleKeypad, value: manifest.scrambledKeypad, tag: "scrambleKeypad"))
+
+    section += 1
+    entries.append(.action(id: next(), section: section, title: strings.Yougram_Encryption_LockNow, destructive: false, tag: "lockNow"))
 
     section += 1
     entries.append(.header(id: next(), section: section, text: strings.Yougram_Encryption_BackgroundExtensionsSection))
@@ -662,6 +669,11 @@ public func yougramLocalEncryptionController(context: AccountContext) -> ViewCon
                 }
             case "scrambleKeypad":
                 try? YougramVaultStore.shared.setScrambledKeypad(newValue, rootPath: rootPath)
+                let _ = updateYougramSettingsInteractively(accountManager: context.sharedContext.accountManager, { settings in
+                    var updated = settings
+                    updated.scramblePasscodeKeypad = newValue
+                    return updated
+                }).start()
             case "allowExtensions":
                 let applyExtensions: (Data) -> Void = { key in
                     try? YougramVaultStore.shared.setAllowBackgroundExtensions(newValue, masterKey: key, rootPath: rootPath)

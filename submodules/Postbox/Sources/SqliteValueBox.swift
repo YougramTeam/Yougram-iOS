@@ -605,8 +605,15 @@ public final class SqliteValueBox: ValueBox {
         assert(resultCode)
         resultCode = database.execute("PRAGMA journal_mode=WAL")
         assert(resultCode)
-        resultCode = database.execute("PRAGMA cipher_memory_security = OFF")
-        assert(resultCode)
+        if PostboxLocalEncryption.isActive || (encryptionParameters?.forceEncryptionIfNoSet == true) {
+            if !self.isReadOnly {
+                let _ = database.execute("PRAGMA secure_delete = ON")
+            }
+            let _ = database.execute("PRAGMA cipher_memory_security = ON")
+        } else {
+            resultCode = database.execute("PRAGMA cipher_memory_security = OFF")
+            assert(resultCode)
+        }
         
         self.pageSize = Int(self.runPragma(database, "page_size"))
 
@@ -2541,6 +2548,21 @@ public final class SqliteValueBox: ValueBox {
         precondition(resultCode)
         resultCode = self.database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         precondition(resultCode)
+    }
+
+    public func checkpointAndPurgeMemory() {
+        self.lock.lock()
+        defer {
+            self.lock.unlock()
+        }
+        guard let database = self.database else {
+            return
+        }
+        self.clearStatements()
+        if !self.isReadOnly {
+            let _ = database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+        let _ = database.execute("PRAGMA shrink_memory")
     }
 
     // Yougram: re-key a live SqliteValueBox in place (plaintext <-> encrypted or key rotation), verifying the exported copy before swap.

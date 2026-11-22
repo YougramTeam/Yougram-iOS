@@ -6,6 +6,7 @@ import ManagedFile
 
 /// Domain-separated subkeys derived from a 32-byte Master Vault Key (`VMK`).
 public final class YougramVaultKeyMaterial: @unchecked Sendable {
+    public let version: Int
     private let lock = NSLock()
     private var _masterKey: Data
     private var _postboxDatabaseKey: Data
@@ -21,27 +22,49 @@ public final class YougramVaultKeyMaterial: @unchecked Sendable {
     private var _mediaKey: Data
     private var _mediaHeaderKey: Data
     private var _mediaFilenameKey: Data
+    private var _sharedMediaKey: Data
     private var invalidated = false
 
     private static let domainSalt = Data("yougram.vault.v1".utf8)
+    private static let domainSaltV2 = Data("yougram.vault.v2".utf8)
 
-    public init(masterKey: Data) {
+    public init(masterKey: Data, version: Int = 2) {
         precondition(masterKey.count == 32, "Yougram master key must be 32 bytes")
+        let resolvedVersion = version >= 2 ? 2 : 1
+        self.version = resolvedVersion
         let ikm = SymmetricKey(data: masterKey)
         self._masterKey = Data(masterKey)
-        self._postboxDatabaseKey = Self.hkdf(ikm: ikm, info: "db.postbox.key.v1", count: 32)
-        self._postboxDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.postbox.salt.v1", count: 16)
-        self._accountManagerDatabaseKey = Self.hkdf(ikm: ikm, info: "db.account-manager.key.v1", count: 32)
-        self._accountManagerDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.account-manager.salt.v1", count: 16)
-        self._accountManagerGuardDatabaseKey = Self.hkdf(ikm: ikm, info: "db.account-manager-guard.key.v1", count: 32)
-        self._accountManagerGuardDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.account-manager-guard.salt.v1", count: 16)
-        self._storageBoxDatabaseKey = Self.hkdf(ikm: ikm, info: "db.storage-box.key.v1", count: 32)
-        self._storageBoxDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.storage-box.salt.v1", count: 16)
-        self._atomicStateKey = Self.hkdf(ikm: ikm, info: "file.atomic-state.v1", count: 32)
-        self._loginTokensKey = Self.hkdf(ikm: ikm, info: "file.login-tokens.v1", count: 32)
-        self._mediaKey = Self.hkdf(ikm: ikm, info: "media.content.v1", count: 32)
-        self._mediaHeaderKey = Self.hkdf(ikm: ikm, info: "media.header.v1", count: 32)
-        self._mediaFilenameKey = Self.hkdf(ikm: ikm, info: "media.filename.v1", count: 32)
+        if resolvedVersion >= 2 {
+            self._postboxDatabaseKey = Self.hkdfSHA512(ikm: ikm, info: "db.postbox.key.v2", count: 32)
+            self._postboxDatabaseSalt = Self.hkdfSHA512(ikm: ikm, info: "db.postbox.salt.v2", count: 16)
+            self._accountManagerDatabaseKey = Self.hkdfSHA512(ikm: ikm, info: "db.account-manager.key.v2", count: 32)
+            self._accountManagerDatabaseSalt = Self.hkdfSHA512(ikm: ikm, info: "db.account-manager.salt.v2", count: 16)
+            self._accountManagerGuardDatabaseKey = Self.hkdfSHA512(ikm: ikm, info: "db.account-manager-guard.key.v2", count: 32)
+            self._accountManagerGuardDatabaseSalt = Self.hkdfSHA512(ikm: ikm, info: "db.account-manager-guard.salt.v2", count: 16)
+            self._storageBoxDatabaseKey = Self.hkdfSHA512(ikm: ikm, info: "db.storage-box.key.v2", count: 32)
+            self._storageBoxDatabaseSalt = Self.hkdfSHA512(ikm: ikm, info: "db.storage-box.salt.v2", count: 16)
+            self._atomicStateKey = Self.hkdfSHA512(ikm: ikm, info: "file.atomic-state.v2", count: 32)
+            self._loginTokensKey = Self.hkdfSHA512(ikm: ikm, info: "file.login-tokens.v2", count: 32)
+            self._mediaKey = Self.hkdfSHA512(ikm: ikm, info: "media.content.v2", count: 32)
+            self._mediaHeaderKey = Self.hkdfSHA512(ikm: ikm, info: "media.header.v2", count: 32)
+            self._mediaFilenameKey = Self.hkdfSHA512(ikm: ikm, info: "media.filename.v2", count: 32)
+            self._sharedMediaKey = Self.hkdfSHA512(ikm: ikm, info: "media.shared.v2", count: 32)
+        } else {
+            self._postboxDatabaseKey = Self.hkdf(ikm: ikm, info: "db.postbox.key.v1", count: 32)
+            self._postboxDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.postbox.salt.v1", count: 16)
+            self._accountManagerDatabaseKey = Self.hkdf(ikm: ikm, info: "db.account-manager.key.v1", count: 32)
+            self._accountManagerDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.account-manager.salt.v1", count: 16)
+            self._accountManagerGuardDatabaseKey = Self.hkdf(ikm: ikm, info: "db.account-manager-guard.key.v1", count: 32)
+            self._accountManagerGuardDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.account-manager-guard.salt.v1", count: 16)
+            self._storageBoxDatabaseKey = Self.hkdf(ikm: ikm, info: "db.storage-box.key.v1", count: 32)
+            self._storageBoxDatabaseSalt = Self.hkdf(ikm: ikm, info: "db.storage-box.salt.v1", count: 16)
+            self._atomicStateKey = Self.hkdf(ikm: ikm, info: "file.atomic-state.v1", count: 32)
+            self._loginTokensKey = Self.hkdf(ikm: ikm, info: "file.login-tokens.v1", count: 32)
+            self._mediaKey = Self.hkdf(ikm: ikm, info: "media.content.v1", count: 32)
+            self._mediaHeaderKey = Self.hkdf(ikm: ikm, info: "media.header.v1", count: 32)
+            self._mediaFilenameKey = Self.hkdf(ikm: ikm, info: "media.filename.v1", count: 32)
+            self._sharedMediaKey = Self.hkdf(ikm: ikm, info: "media.shared.v1", count: 32)
+        }
     }
 
     deinit {
@@ -68,6 +91,29 @@ public final class YougramVaultKeyMaterial: @unchecked Sendable {
         return Data(okm.prefix(count))
     }
 
+    /// RFC 5869 HKDF-SHA512 implemented via CryptoKit HMAC for v2 vault subkey and cascade derivation.
+    static func hkdfSHA512(ikm: SymmetricKey, salt: Data = domainSaltV2, info: String, count: Int) -> Data {
+        let infoData = Data(info.utf8)
+        var ikmBytes = ikm.withUnsafeBytes { Data($0) }
+        var prkBytes = Data(HMAC<SHA512>.authenticationCode(for: ikmBytes, using: SymmetricKey(data: salt)))
+        Self.zeroize(&ikmBytes)
+        let prk = SymmetricKey(data: prkBytes)
+        Self.zeroize(&prkBytes)
+        var okm = Data()
+        okm.reserveCapacity(count)
+        var t = Data()
+        var counter: UInt8 = 1
+        while okm.count < count {
+            var input = t
+            input.append(infoData)
+            input.append(counter)
+            t = Data(HMAC<SHA512>.authenticationCode(for: input, using: prk))
+            okm.append(t)
+            counter &+= 1
+        }
+        return Data(okm.prefix(count))
+    }
+
     public func invalidate() {
         self.lock.lock()
         defer { self.lock.unlock() }
@@ -87,6 +133,7 @@ public final class YougramVaultKeyMaterial: @unchecked Sendable {
         Self.zeroize(&self._mediaKey)
         Self.zeroize(&self._mediaHeaderKey)
         Self.zeroize(&self._mediaFilenameKey)
+        Self.zeroize(&self._sharedMediaKey)
     }
 
     private static func zeroize(_ data: inout Data) {
@@ -164,6 +211,12 @@ public final class YougramVaultKeyMaterial: @unchecked Sendable {
         defer { self.lock.unlock() }
         return Data(self._mediaFilenameKey)
     }
+
+    public var sharedMediaKey: Data {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return Data(self._sharedMediaKey)
+    }
 }
 
 public enum YougramLocalEncryptionError: Error {
@@ -173,38 +226,80 @@ public enum YougramLocalEncryptionError: Error {
     case ioFailed
 }
 
-/// Whole-blob authenticated encryption (`YGE1` || AES-256-GCM combined sealed box).
+/// Whole-blob authenticated encryption:
+/// - `YGE1` (legacy read support): single-layer AES-256-GCM
+/// - `YGE2` (default write format): Dual-Cipher Cascade (AES-256-GCM wrapped inside ChaCha20-Poly1305)
 public enum YougramEncryptedBlob {
-    public static let magic = Data([0x59, 0x47, 0x45, 0x31]) // "YGE1"
+    public static let magic = Data([0x59, 0x47, 0x45, 0x31])   // "YGE1"
+    public static let magicV2 = Data([0x59, 0x47, 0x45, 0x32]) // "YGE2"
+    private static let yge2Salt = Data("yougram.yge2.cascade".utf8)
 
     public static func isEncrypted(_ data: Data) -> Bool {
-        return data.count >= 4 && data.prefix(4) == Self.magic
+        guard data.count >= 4 else { return false }
+        let prefix = data.prefix(4)
+        return prefix == Self.magic || prefix == Self.magicV2
+    }
+
+    private static func deriveCascadeKeys(key: Data, aad: String) -> (aesKey: SymmetricKey, chachaKey: SymmetricKey) {
+        let ikm = SymmetricKey(data: key)
+        var aesData = YougramVaultKeyMaterial.hkdfSHA512(ikm: ikm, salt: Self.yge2Salt, info: "yge2.aes:" + aad, count: 32)
+        var chachaData = YougramVaultKeyMaterial.hkdfSHA512(ikm: ikm, salt: Self.yge2Salt, info: "yge2.chacha:" + aad, count: 32)
+        let aesKey = SymmetricKey(data: aesData)
+        let chachaKey = SymmetricKey(data: chachaData)
+        if !aesData.isEmpty { aesData.resetBytes(in: 0 ..< aesData.count) }
+        if !chachaData.isEmpty { chachaData.resetBytes(in: 0 ..< chachaData.count) }
+        return (aesKey, chachaKey)
     }
 
     public static func seal(_ plaintext: Data, key: Data, aad: String) throws -> Data {
         guard key.count == 32 else { throw YougramLocalEncryptionError.invalidKey }
-        let nonceBytes = try randomBytes(12)
-        let nonce = try AES.GCM.Nonce(data: nonceBytes)
-        let sealed = try AES.GCM.seal(plaintext, using: SymmetricKey(data: key), nonce: nonce, authenticating: Data(aad.utf8))
-        guard let combined = sealed.combined else {
+        let (aesKey, chachaKey) = Self.deriveCascadeKeys(key: key, aad: aad)
+
+        let innerNonce = try AES.GCM.Nonce(data: randomBytes(12))
+        let innerSealed = try AES.GCM.seal(plaintext, using: aesKey, nonce: innerNonce, authenticating: Data((aad + ":aes").utf8))
+        guard let innerCombined = innerSealed.combined else {
             throw YougramLocalEncryptionError.authenticationFailed
         }
-        var result = Data(capacity: 4 + combined.count)
-        result.append(Self.magic)
-        result.append(combined)
+
+        let outerNonce = try ChaChaPoly.Nonce(data: randomBytes(12))
+        let outerSealed = try ChaChaPoly.seal(innerCombined, using: chachaKey, nonce: outerNonce, authenticating: Data((aad + ":chacha").utf8))
+        let outerCombined = outerSealed.combined
+
+        var result = Data(capacity: 4 + outerCombined.count)
+        result.append(Self.magicV2)
+        result.append(outerCombined)
         return result
     }
 
     public static func open(_ data: Data, key: Data, aad: String) throws -> Data {
         guard key.count == 32 else { throw YougramLocalEncryptionError.invalidKey }
-        guard data.count >= 4 + 12 + 16, data.prefix(4) == Self.magic else {
+        guard data.count >= 4 else { throw YougramLocalEncryptionError.invalidFormat }
+        let header = data.prefix(4)
+        if header == Self.magicV2 {
+            guard data.count >= 4 + 28 + 28 else {
+                throw YougramLocalEncryptionError.invalidFormat
+            }
+            let (aesKey, chachaKey) = Self.deriveCascadeKeys(key: key, aad: aad)
+            do {
+                let outerBox = try ChaChaPoly.SealedBox(combined: data.dropFirst(4))
+                let innerCombined = try ChaChaPoly.open(outerBox, using: chachaKey, authenticating: Data((aad + ":chacha").utf8))
+                let innerBox = try AES.GCM.SealedBox(combined: innerCombined)
+                return try AES.GCM.open(innerBox, using: aesKey, authenticating: Data((aad + ":aes").utf8))
+            } catch {
+                throw YougramLocalEncryptionError.authenticationFailed
+            }
+        } else if header == Self.magic {
+            guard data.count >= 4 + 12 + 16 else {
+                throw YougramLocalEncryptionError.invalidFormat
+            }
+            do {
+                let box = try AES.GCM.SealedBox(combined: data.dropFirst(4))
+                return try AES.GCM.open(box, using: SymmetricKey(data: key), authenticating: Data(aad.utf8))
+            } catch {
+                throw YougramLocalEncryptionError.authenticationFailed
+            }
+        } else {
             throw YougramLocalEncryptionError.invalidFormat
-        }
-        do {
-            let box = try AES.GCM.SealedBox(combined: data.dropFirst(4))
-            return try AES.GCM.open(box, using: SymmetricKey(data: key), authenticating: Data(aad.utf8))
-        } catch {
-            throw YougramLocalEncryptionError.authenticationFailed
         }
     }
 }
@@ -256,22 +351,29 @@ private func appendLittleEndian(_ value: UInt64, to data: inout Data) {
     withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
 }
 
-/// Chunked AES-256-GCM media container (`YGCF` v1) with O(1) range reads and authenticated trailer,
-/// plus deterministic AES-256-CTR support (`YGPR`) for sparse partial downloads.
+/// Chunked Dual-Cipher (`YGCF` v2: AES-256-GCM + ChaCha20-Poly1305 cascade, HMAC-SHA512 header)
+/// with backward-compatible `YGCF` v1 reader, O(1) range reads, and encrypted trailer,
+/// plus deterministic AES-256-CTR support for sparse partial downloads.
 public enum YougramChunkedFileCrypto {
     public static let magic = Data([0x59, 0x47, 0x43, 0x46]) // "YGCF"
     public static let trailerMagic = Data([0x59, 0x47, 0x54, 0x31]) // "YGT1"
     public static let headerSize = 68
+    public static let headerSizeV2 = 84
     public static let defaultChunkSize = 65536
     public static let tagSize = 16
+    public static let tagSizeV2 = 32
 
     public struct Header {
+        public let formatVersion: UInt8
+        public let headerSize: Int
+        public let tagSize: Int
         public let chunkSize: Int
         public let plaintextSize: Int64
         public let fileSalt: Data
         public let dataEndOffset: Int64
         public let totalFileSize: Int64
         public let fileKey: SymmetricKey
+        public let outerFileKey: SymmetricKey?
 
         public var chunkCount: Int64 {
             if self.plaintextSize == 0 {
@@ -301,11 +403,22 @@ public enum YougramChunkedFileCrypto {
         return SymmetricKey(data: derived)
     }
 
-    private static func chunkNonce(index: UInt64) throws -> AES.GCM.Nonce {
+    private static func deriveFileKeysV2(mediaKey: Data, fileSalt: Data) -> (aesKey: SymmetricKey, chachaKey: SymmetricKey) {
+        let ikm = SymmetricKey(data: mediaKey)
+        var aesData = YougramVaultKeyMaterial.hkdfSHA512(ikm: ikm, salt: fileSalt, info: "ygcf.v2.aes", count: 32)
+        var chachaData = YougramVaultKeyMaterial.hkdfSHA512(ikm: ikm, salt: fileSalt, info: "ygcf.v2.chacha", count: 32)
+        let aesKey = SymmetricKey(data: aesData)
+        let chachaKey = SymmetricKey(data: chachaData)
+        if !aesData.isEmpty { aesData.resetBytes(in: 0 ..< aesData.count) }
+        if !chachaData.isEmpty { chachaData.resetBytes(in: 0 ..< chachaData.count) }
+        return (aesKey, chachaKey)
+    }
+
+    private static func chunkNonceData(index: UInt64, domain: UInt32) -> Data {
         var nonceData = Data(capacity: 12)
-        appendLittleEndian(UInt32(0), to: &nonceData)
+        appendLittleEndian(domain, to: &nonceData)
         appendLittleEndian(index, to: &nonceData)
-        return try AES.GCM.Nonce(data: nonceData)
+        return nonceData
     }
 
     private static func chunkAAD(fileSalt: Data, index: UInt64, plaintextSize: UInt64) -> Data {
@@ -322,21 +435,21 @@ public enum YougramChunkedFileCrypto {
         return aad
     }
 
-    private static func makeHeaderBytes(chunkSize: UInt32, plaintextSize: UInt64, fileSalt: Data, mediaHeaderKey: Data) -> Data {
-        var header = Data(capacity: headerSize)
+    private static func makeHeaderBytesV2(chunkSize: UInt32, plaintextSize: UInt64, fileSalt: Data, mediaHeaderKey: Data) -> Data {
+        var header = Data(capacity: headerSizeV2)
         header.append(magic)
-        header.append(1) // version
+        header.append(2) // version 2 (Dual-Cipher Cascade + HMAC-SHA512)
         header.append(0) // flags
         appendLittleEndian(UInt16(0), to: &header)
         appendLittleEndian(chunkSize, to: &header)
         appendLittleEndian(plaintextSize, to: &header)
         header.append(fileSalt)
-        let mac = Data(HMAC<SHA256>.authenticationCode(for: header, using: SymmetricKey(data: mediaHeaderKey)))
-        header.append(mac.prefix(16))
+        let mac = Data(HMAC<SHA512>.authenticationCode(for: header, using: SymmetricKey(data: mediaHeaderKey)))
+        header.append(mac.prefix(32))
         return header
     }
 
-    private static func makeTrailer(originalFileName: String, fileSalt: Data, fileKey: SymmetricKey) throws -> Data {
+    private static func makeTrailerV1(originalFileName: String, fileSalt: Data, fileKey: SymmetricKey) throws -> Data {
         let nameData = Data(originalFileName.utf8)
         let nonce = try AES.GCM.Nonce(data: randomBytes(12))
         let sealed = try AES.GCM.seal(nameData, using: fileKey, nonce: nonce, authenticating: nameAAD(fileSalt: fileSalt))
@@ -348,6 +461,97 @@ public enum YougramChunkedFileCrypto {
         appendLittleEndian(UInt32(combined.count), to: &trailer)
         trailer.append(trailerMagic)
         return trailer
+    }
+
+    private static func makeTrailerV2(originalFileName: String, fileSalt: Data, aesKey: SymmetricKey, chachaKey: SymmetricKey) throws -> Data {
+        let nameData = Data(originalFileName.utf8)
+        let aad = nameAAD(fileSalt: fileSalt)
+        let innerNonce = try AES.GCM.Nonce(data: randomBytes(12))
+        let innerSealed = try AES.GCM.seal(nameData, using: aesKey, nonce: innerNonce, authenticating: aad)
+        guard let innerCombined = innerSealed.combined else {
+            throw YougramLocalEncryptionError.authenticationFailed
+        }
+        let outerNonce = try ChaChaPoly.Nonce(data: randomBytes(12))
+        let outerSealed = try ChaChaPoly.seal(innerCombined, using: chachaKey, nonce: outerNonce, authenticating: aad)
+        let outerCombined = outerSealed.combined
+
+        var trailer = Data(capacity: outerCombined.count + 8)
+        trailer.append(outerCombined)
+        appendLittleEndian(UInt32(outerCombined.count), to: &trailer)
+        trailer.append(trailerMagic)
+        return trailer
+    }
+
+    private static func sealChunkV2<C: DataProtocol>(
+        _ chunk: C,
+        aesKey: SymmetricKey,
+        chachaKey: SymmetricKey,
+        fileSalt: Data,
+        index: UInt64,
+        plaintextSize: UInt64
+    ) throws -> Data {
+        let aad = chunkAAD(fileSalt: fileSalt, index: index, plaintextSize: plaintextSize)
+        let innerNonce = try AES.GCM.Nonce(data: chunkNonceData(index: index, domain: 1))
+        let innerSealed = try AES.GCM.seal(chunk, using: aesKey, nonce: innerNonce, authenticating: aad)
+        var innerPayload = Data(capacity: chunk.count + tagSize)
+        innerPayload.append(innerSealed.ciphertext)
+        innerPayload.append(innerSealed.tag)
+
+        let outerNonce = try ChaChaPoly.Nonce(data: chunkNonceData(index: index, domain: 2))
+        let outerSealed = try ChaChaPoly.seal(innerPayload, using: chachaKey, nonce: outerNonce, authenticating: aad)
+        var out = Data(capacity: chunk.count + tagSizeV2)
+        out.append(outerSealed.ciphertext)
+        out.append(outerSealed.tag)
+        return out
+    }
+
+    private static func openChunk(
+        diskBytes: Data,
+        chunkPlainLen: Int,
+        header: Header,
+        chunkIndex: UInt64
+    ) throws -> Data {
+        let aad = chunkAAD(fileSalt: header.fileSalt, index: chunkIndex, plaintextSize: UInt64(header.plaintextSize))
+        if header.formatVersion >= 2 {
+            guard let outerKey = header.outerFileKey else {
+                throw YougramLocalEncryptionError.invalidFormat
+            }
+            let outerNonce = try ChaChaPoly.Nonce(data: chunkNonceData(index: chunkIndex, domain: 2))
+            let outerBox = try ChaChaPoly.SealedBox(
+                nonce: outerNonce,
+                ciphertext: diskBytes.prefix(chunkPlainLen + tagSize),
+                tag: diskBytes.suffix(tagSize)
+            )
+            let innerBytes: Data
+            do {
+                innerBytes = try ChaChaPoly.open(outerBox, using: outerKey, authenticating: aad)
+            } catch {
+                throw YougramLocalEncryptionError.authenticationFailed
+            }
+            let innerNonce = try AES.GCM.Nonce(data: chunkNonceData(index: chunkIndex, domain: 1))
+            let innerBox = try AES.GCM.SealedBox(
+                nonce: innerNonce,
+                ciphertext: innerBytes.prefix(chunkPlainLen),
+                tag: innerBytes.suffix(tagSize)
+            )
+            do {
+                return try AES.GCM.open(innerBox, using: header.fileKey, authenticating: aad)
+            } catch {
+                throw YougramLocalEncryptionError.authenticationFailed
+            }
+        } else {
+            let nonce = try AES.GCM.Nonce(data: chunkNonceData(index: chunkIndex, domain: 0))
+            let box = try AES.GCM.SealedBox(
+                nonce: nonce,
+                ciphertext: diskBytes.prefix(chunkPlainLen),
+                tag: diskBytes.suffix(tagSize)
+            )
+            do {
+                return try AES.GCM.open(box, using: header.fileKey, authenticating: aad)
+            } catch {
+                throw YougramLocalEncryptionError.authenticationFailed
+            }
+        }
     }
 
     public static func readHeader(atPath path: String, keys: YougramVaultKeyMaterial) -> Header? {
@@ -363,32 +567,48 @@ public enum YougramChunkedFileCrypto {
         let totalFileSize = Int64(st.st_size)
         guard totalFileSize >= Int64(headerSize + 8) else { return nil }
 
-        var headerData = Data(count: headerSize)
-        let readCount = headerData.withUnsafeMutableBytes { buf -> Int in
+        var prefixHeader = Data(count: 52)
+        let prefixRead = prefixHeader.withUnsafeMutableBytes { buf -> Int in
             guard let base = buf.baseAddress else { return -1 }
-            return preadFull(fd: fd, buffer: base, count: headerSize, offset: 0)
+            return preadFull(fd: fd, buffer: base, count: 52, offset: 0)
         }
-        guard readCount == headerSize else { return nil }
-        guard headerData.prefix(4) == magic else { return nil }
-        guard headerData[4] == 1 else { return nil }
+        guard prefixRead == 52, prefixHeader.prefix(4) == magic else { return nil }
+        let formatVersion = prefixHeader[4]
+        guard formatVersion == 1 || formatVersion == 2 else { return nil }
 
-        let chunkSizeU32 = readLittleEndianUInt32(headerData, offset: 8)
+        let hdrSize = formatVersion == 2 ? headerSizeV2 : headerSize
+        let tSize = formatVersion == 2 ? tagSizeV2 : tagSize
+        guard totalFileSize >= Int64(hdrSize + 8) else { return nil }
+
+        let macLen = formatVersion == 2 ? 32 : 16
+        var storedMac = Data(count: macLen)
+        let macRead = storedMac.withUnsafeMutableBytes { buf -> Int in
+            guard let base = buf.baseAddress else { return -1 }
+            return preadFull(fd: fd, buffer: base, count: macLen, offset: 52)
+        }
+        guard macRead == macLen else { return nil }
+
+        if formatVersion == 2 {
+            let expectedMac = Data(HMAC<SHA512>.authenticationCode(for: prefixHeader, using: SymmetricKey(data: keys.mediaHeaderKey))).prefix(32)
+            guard storedMac == expectedMac else { return nil }
+        } else {
+            let expectedMac = Data(HMAC<SHA256>.authenticationCode(for: prefixHeader, using: SymmetricKey(data: keys.mediaHeaderKey))).prefix(16)
+            guard storedMac == expectedMac else { return nil }
+        }
+
+        let chunkSizeU32 = readLittleEndianUInt32(prefixHeader, offset: 8)
         guard chunkSizeU32 >= 4096 && chunkSizeU32 <= 4 * 1024 * 1024 else { return nil }
-        let plaintextSizeU64 = readLittleEndianUInt64(headerData, offset: 12)
+        let plaintextSizeU64 = readLittleEndianUInt64(prefixHeader, offset: 12)
         guard plaintextSizeU64 <= UInt64(Int64.max / 2) else { return nil }
         let plaintextSize = Int64(plaintextSizeU64)
-        let fileSalt = Data(headerData[20 ..< 52])
-        let storedMac = Data(headerData[52 ..< 68])
-
-        let expectedMac = Data(HMAC<SHA256>.authenticationCode(for: headerData.prefix(52), using: SymmetricKey(data: keys.mediaHeaderKey))).prefix(16)
-        guard storedMac == expectedMac else { return nil }
+        let fileSalt = Data(prefixHeader[20 ..< 52])
 
         let chunkCount: Int64 = plaintextSize == 0 ? 0 : (plaintextSize + Int64(chunkSizeU32) - 1) / Int64(chunkSizeU32)
-        let (chunkOverhead, overflow1) = chunkCount.multipliedReportingOverflow(by: Int64(tagSize))
+        let (chunkOverhead, overflow1) = chunkCount.multipliedReportingOverflow(by: Int64(tSize))
         guard !overflow1 else { return nil }
         let (payloadSize, overflow2) = plaintextSize.addingReportingOverflow(chunkOverhead)
         guard !overflow2 else { return nil }
-        let (dataEndOffset, overflow3) = Int64(headerSize).addingReportingOverflow(payloadSize)
+        let (dataEndOffset, overflow3) = Int64(hdrSize).addingReportingOverflow(payloadSize)
         guard !overflow3 else { return nil }
 
         // Require the 8-byte trailer footer so file truncation is caught immediately.
@@ -400,17 +620,38 @@ public enum YougramChunkedFileCrypto {
         }
         guard footerRead == 8, footer.suffix(4) == trailerMagic else { return nil }
         let trailerLen = Int64(readLittleEndianUInt32(footer, offset: 0))
-        guard trailerLen >= 28, dataEndOffset + trailerLen + 8 == totalFileSize else { return nil }
+        let minTrailerLen: Int64 = formatVersion == 2 ? 56 : 28
+        guard trailerLen >= minTrailerLen, dataEndOffset + trailerLen + 8 == totalFileSize else { return nil }
 
-        let fileKey = deriveFileKey(mediaKey: keys.mediaKey, fileSalt: fileSalt)
-        return Header(
-            chunkSize: Int(chunkSizeU32),
-            plaintextSize: plaintextSize,
-            fileSalt: fileSalt,
-            dataEndOffset: dataEndOffset,
-            totalFileSize: totalFileSize,
-            fileKey: fileKey
-        )
+        if formatVersion == 2 {
+            let (aesKey, chachaKey) = deriveFileKeysV2(mediaKey: keys.mediaKey, fileSalt: fileSalt)
+            return Header(
+                formatVersion: formatVersion,
+                headerSize: hdrSize,
+                tagSize: tSize,
+                chunkSize: Int(chunkSizeU32),
+                plaintextSize: plaintextSize,
+                fileSalt: fileSalt,
+                dataEndOffset: dataEndOffset,
+                totalFileSize: totalFileSize,
+                fileKey: aesKey,
+                outerFileKey: chachaKey
+            )
+        } else {
+            let fileKey = deriveFileKey(mediaKey: keys.mediaKey, fileSalt: fileSalt)
+            return Header(
+                formatVersion: formatVersion,
+                headerSize: hdrSize,
+                tagSize: tSize,
+                chunkSize: Int(chunkSizeU32),
+                plaintextSize: plaintextSize,
+                fileSalt: fileSalt,
+                dataEndOffset: dataEndOffset,
+                totalFileSize: totalFileSize,
+                fileKey: fileKey,
+                outerFileKey: nil
+            )
+        }
     }
 
     public static func plaintextSize(atPath path: String, keys: YougramVaultKeyMaterial) -> Int64? {
@@ -423,18 +664,31 @@ public enum YougramChunkedFileCrypto {
         defer { Darwin.close(fd) }
         guard let header = self.readHeader(fd: fd, keys: keys) else { return nil }
         let sealedLen = Int(header.totalFileSize - header.dataEndOffset - 8)
-        guard sealedLen >= 28 && sealedLen <= 16384 else { return nil }
+        let minLen = header.formatVersion >= 2 ? 56 : 28
+        guard sealedLen >= minLen && sealedLen <= 16384 else { return nil }
         var sealedData = Data(count: sealedLen)
         let n = sealedData.withUnsafeMutableBytes { buf -> Int in
             guard let base = buf.baseAddress else { return -1 }
             return preadFull(fd: fd, buffer: base, count: sealedLen, offset: header.dataEndOffset)
         }
         guard n == sealedLen else { return nil }
-        guard let box = try? AES.GCM.SealedBox(combined: sealedData),
-              let nameData = try? AES.GCM.open(box, using: header.fileKey, authenticating: nameAAD(fileSalt: header.fileSalt)) else {
-            return nil
+        let aad = nameAAD(fileSalt: header.fileSalt)
+        if header.formatVersion >= 2 {
+            guard let outerKey = header.outerFileKey,
+                  let outerBox = try? ChaChaPoly.SealedBox(combined: sealedData),
+                  let innerCombined = try? ChaChaPoly.open(outerBox, using: outerKey, authenticating: aad),
+                  let innerBox = try? AES.GCM.SealedBox(combined: innerCombined),
+                  let nameData = try? AES.GCM.open(innerBox, using: header.fileKey, authenticating: aad) else {
+                return nil
+            }
+            return String(data: nameData, encoding: .utf8)
+        } else {
+            guard let box = try? AES.GCM.SealedBox(combined: sealedData),
+                  let nameData = try? AES.GCM.open(box, using: header.fileKey, authenticating: aad) else {
+                return nil
+            }
+            return String(data: nameData, encoding: .utf8)
         }
-        return String(data: nameData, encoding: .utf8)
     }
 
     public static func updateOriginalFileName(atPath path: String, newOriginalFileName: String, keys: YougramVaultKeyMaterial) -> Bool {
@@ -442,7 +696,13 @@ public enum YougramChunkedFileCrypto {
         guard fd >= 0 else { return false }
         defer { Darwin.close(fd) }
         guard let header = self.readHeader(fd: fd, keys: keys) else { return false }
-        guard let trailer = try? makeTrailer(originalFileName: newOriginalFileName, fileSalt: header.fileSalt, fileKey: header.fileKey) else {
+        let trailer: Data?
+        if header.formatVersion >= 2, let outerKey = header.outerFileKey {
+            trailer = try? makeTrailerV2(originalFileName: newOriginalFileName, fileSalt: header.fileSalt, aesKey: header.fileKey, chachaKey: outerKey)
+        } else {
+            trailer = try? makeTrailerV1(originalFileName: newOriginalFileName, fileSalt: header.fileSalt, fileKey: header.fileKey)
+        }
+        guard let trailer else {
             return false
         }
         guard Darwin.ftruncate(fd, header.dataEndOffset) == 0 else { return false }
@@ -459,10 +719,10 @@ public enum YougramChunkedFileCrypto {
 
     public static func encryptData(_ data: Data, originalFileName: String, toPath path: String, keys: YougramVaultKeyMaterial) throws {
         let fileSalt = try randomBytes(32)
-        let fileKey = deriveFileKey(mediaKey: keys.mediaKey, fileSalt: fileSalt)
+        let (aesKey, chachaKey) = deriveFileKeysV2(mediaKey: keys.mediaKey, fileSalt: fileSalt)
         let chunkSize = defaultChunkSize
         let plaintextSize = data.count
-        let header = makeHeaderBytes(chunkSize: UInt32(chunkSize), plaintextSize: UInt64(plaintextSize), fileSalt: fileSalt, mediaHeaderKey: keys.mediaHeaderKey)
+        let header = makeHeaderBytesV2(chunkSize: UInt32(chunkSize), plaintextSize: UInt64(plaintextSize), fileSalt: fileSalt, mediaHeaderKey: keys.mediaHeaderKey)
 
         let tmpPath = path + ".ygtmp-\(UUID().uuidString)"
         let fd = Darwin.open(tmpPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)
@@ -486,12 +746,7 @@ public enum YougramChunkedFileCrypto {
         while offset < plaintextSize {
             let end = min(plaintextSize, offset + chunkSize)
             let chunk = data.subdata(in: offset ..< end)
-            let nonce = try chunkNonce(index: chunkIndex)
-            let aad = chunkAAD(fileSalt: fileSalt, index: chunkIndex, plaintextSize: UInt64(plaintextSize))
-            let sealed = try AES.GCM.seal(chunk, using: fileKey, nonce: nonce, authenticating: aad)
-            var out = Data(capacity: chunk.count + tagSize)
-            out.append(sealed.ciphertext)
-            out.append(sealed.tag)
+            let out = try sealChunkV2(chunk, aesKey: aesKey, chachaKey: chachaKey, fileSalt: fileSalt, index: chunkIndex, plaintextSize: UInt64(plaintextSize))
             let ok = out.withUnsafeBytes { buf -> Bool in
                 guard let base = buf.baseAddress else { return false }
                 return writeFull(fd: fd, buffer: base, count: out.count)
@@ -501,7 +756,7 @@ public enum YougramChunkedFileCrypto {
             chunkIndex &+= 1
         }
 
-        let trailer = try makeTrailer(originalFileName: originalFileName, fileSalt: fileSalt, fileKey: fileKey)
+        let trailer = try makeTrailerV2(originalFileName: originalFileName, fileSalt: fileSalt, aesKey: aesKey, chachaKey: chachaKey)
         let trailerOk = trailer.withUnsafeBytes { buf -> Bool in
             guard let base = buf.baseAddress else { return false }
             return writeFull(fd: fd, buffer: base, count: trailer.count)
@@ -525,9 +780,9 @@ public enum YougramChunkedFileCrypto {
         let plaintextSize = Int64(st.st_size)
 
         let fileSalt = try randomBytes(32)
-        let fileKey = deriveFileKey(mediaKey: keys.mediaKey, fileSalt: fileSalt)
+        let (aesKey, chachaKey) = deriveFileKeysV2(mediaKey: keys.mediaKey, fileSalt: fileSalt)
         let chunkSize = defaultChunkSize
-        let header = makeHeaderBytes(chunkSize: UInt32(chunkSize), plaintextSize: UInt64(plaintextSize), fileSalt: fileSalt, mediaHeaderKey: keys.mediaHeaderKey)
+        let header = makeHeaderBytesV2(chunkSize: UInt32(chunkSize), plaintextSize: UInt64(plaintextSize), fileSalt: fileSalt, mediaHeaderKey: keys.mediaHeaderKey)
 
         let tmpPath = path + ".ygtmp-\(UUID().uuidString)"
         let outFd = Darwin.open(tmpPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)
@@ -556,12 +811,7 @@ public enum YougramChunkedFileCrypto {
                 return readExactOrEOF(fd: inFd, buffer: base, count: toRead)
             }
             guard actual == toRead else { throw YougramLocalEncryptionError.ioFailed }
-            let nonce = try chunkNonce(index: chunkIndex)
-            let aad = chunkAAD(fileSalt: fileSalt, index: chunkIndex, plaintextSize: UInt64(plaintextSize))
-            let sealed = try AES.GCM.seal(buffer.prefix(toRead), using: fileKey, nonce: nonce, authenticating: aad)
-            var out = Data(capacity: toRead + tagSize)
-            out.append(sealed.ciphertext)
-            out.append(sealed.tag)
+            let out = try sealChunkV2(buffer.prefix(toRead), aesKey: aesKey, chachaKey: chachaKey, fileSalt: fileSalt, index: chunkIndex, plaintextSize: UInt64(plaintextSize))
             let ok = out.withUnsafeBytes { buf -> Bool in
                 guard let base = buf.baseAddress else { return false }
                 return writeFull(fd: outFd, buffer: base, count: out.count)
@@ -571,7 +821,7 @@ public enum YougramChunkedFileCrypto {
             chunkIndex &+= 1
         }
 
-        let trailer = try makeTrailer(originalFileName: originalFileName, fileSalt: fileSalt, fileKey: fileKey)
+        let trailer = try makeTrailerV2(originalFileName: originalFileName, fileSalt: fileSalt, aesKey: aesKey, chachaKey: chachaKey)
         let trailerOk = trailer.withUnsafeBytes { buf -> Bool in
             guard let base = buf.baseAddress else { return false }
             return writeFull(fd: outFd, buffer: base, count: trailer.count)
@@ -647,7 +897,7 @@ public enum YougramChunkedFileCrypto {
         let chunkSize = Int64(header.chunkSize)
         let firstChunk = lower / chunkSize
         let lastChunk = (upper - 1) / chunkSize
-        let stride = Int64(header.chunkSize + tagSize)
+        let stride = Int64(header.chunkSize + header.tagSize)
 
         var result = Data()
         result.reserveCapacity(Int(upper - lower))
@@ -655,8 +905,8 @@ public enum YougramChunkedFileCrypto {
         for chunkIdx in firstChunk ... lastChunk {
             let chunkPlainStart = chunkIdx * chunkSize
             let chunkPlainLen = Int(min(chunkSize, header.plaintextSize - chunkPlainStart))
-            let diskOffset = Int64(headerSize) + chunkIdx * stride
-            let diskLen = chunkPlainLen + tagSize
+            let diskOffset = Int64(header.headerSize) + chunkIdx * stride
+            let diskLen = chunkPlainLen + header.tagSize
 
             var diskBytes = Data(count: diskLen)
             let readLen = diskBytes.withUnsafeMutableBytes { buf -> Int in
@@ -667,19 +917,7 @@ public enum YougramChunkedFileCrypto {
                 throw YougramLocalEncryptionError.ioFailed
             }
 
-            let nonce = try chunkNonce(index: UInt64(chunkIdx))
-            let aad = chunkAAD(fileSalt: header.fileSalt, index: UInt64(chunkIdx), plaintextSize: UInt64(header.plaintextSize))
-            let box = try AES.GCM.SealedBox(
-                nonce: nonce,
-                ciphertext: diskBytes.prefix(chunkPlainLen),
-                tag: diskBytes.suffix(tagSize)
-            )
-            let plainChunk: Data
-            do {
-                plainChunk = try AES.GCM.open(box, using: header.fileKey, authenticating: aad)
-            } catch {
-                throw YougramLocalEncryptionError.authenticationFailed
-            }
+            let plainChunk = try openChunk(diskBytes: diskBytes, chunkPlainLen: chunkPlainLen, header: header, chunkIndex: UInt64(chunkIdx))
 
             let sliceLower = Int(max(0, lower - chunkPlainStart))
             let sliceUpper = Int(min(Int64(chunkPlainLen), upper - chunkPlainStart))
@@ -717,12 +955,12 @@ public enum YougramChunkedFileCrypto {
 
         let chunkSize = Int64(header.chunkSize)
         let totalChunks = header.chunkCount
-        let stride = Int64(header.chunkSize + tagSize)
+        let stride = Int64(header.chunkSize + header.tagSize)
         for chunkIdx in 0 ..< totalChunks {
             let chunkPlainStart = chunkIdx * chunkSize
             let chunkPlainLen = Int(min(chunkSize, header.plaintextSize - chunkPlainStart))
-            let diskOffset = Int64(headerSize) + chunkIdx * stride
-            let diskLen = chunkPlainLen + tagSize
+            let diskOffset = Int64(header.headerSize) + chunkIdx * stride
+            let diskLen = chunkPlainLen + header.tagSize
 
             var diskBytes = Data(count: diskLen)
             let readLen = diskBytes.withUnsafeMutableBytes { buf -> Int in
@@ -733,19 +971,7 @@ public enum YougramChunkedFileCrypto {
                 throw YougramLocalEncryptionError.ioFailed
             }
 
-            let nonce = try chunkNonce(index: UInt64(chunkIdx))
-            let aad = chunkAAD(fileSalt: header.fileSalt, index: UInt64(chunkIdx), plaintextSize: UInt64(header.plaintextSize))
-            let box = try AES.GCM.SealedBox(
-                nonce: nonce,
-                ciphertext: diskBytes.prefix(chunkPlainLen),
-                tag: diskBytes.suffix(tagSize)
-            )
-            let plainChunk: Data
-            do {
-                plainChunk = try AES.GCM.open(box, using: header.fileKey, authenticating: aad)
-            } catch {
-                throw YougramLocalEncryptionError.authenticationFailed
-            }
+            let plainChunk = try openChunk(diskBytes: diskBytes, chunkPlainLen: chunkPlainLen, header: header, chunkIndex: UInt64(chunkIdx))
 
             let ok = plainChunk.withUnsafeBytes { buf -> Bool in
                 guard let base = buf.baseAddress else { return false }
@@ -764,10 +990,10 @@ public enum YougramChunkedFileCrypto {
     // MARK: - AES-256-CTR for sparse partial files
 
     public static func derivePartialKey(mediaKey: Data, salt: Data) -> Data {
-        return YougramVaultKeyMaterial.hkdf(
+        return YougramVaultKeyMaterial.hkdfSHA512(
             ikm: SymmetricKey(data: mediaKey),
             salt: salt,
-            info: "ygpr.partial.v1",
+            info: "ygpr.partial.v2",
             count: 32
         )
     }
@@ -859,9 +1085,9 @@ public enum YougramChunkedFileCrypto {
         defer { Darwin.close(inFd) }
 
         let fileSalt = try randomBytes(32)
-        let fileKey = deriveFileKey(mediaKey: keys.mediaKey, fileSalt: fileSalt)
+        let (aesKey, chachaKey) = deriveFileKeysV2(mediaKey: keys.mediaKey, fileSalt: fileSalt)
         let chunkSize = defaultChunkSize
-        let header = makeHeaderBytes(chunkSize: UInt32(chunkSize), plaintextSize: UInt64(plaintextSize), fileSalt: fileSalt, mediaHeaderKey: keys.mediaHeaderKey)
+        let header = makeHeaderBytesV2(chunkSize: UInt32(chunkSize), plaintextSize: UInt64(plaintextSize), fileSalt: fileSalt, mediaHeaderKey: keys.mediaHeaderKey)
 
         let tmpPath = path + ".ygtmp-\(UUID().uuidString)"
         let outFd = Darwin.open(tmpPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)
@@ -904,12 +1130,7 @@ public enum YougramChunkedFileCrypto {
             }
             guard transformed else { throw YougramLocalEncryptionError.authenticationFailed }
 
-            let nonce = try chunkNonce(index: chunkIndex)
-            let aad = chunkAAD(fileSalt: fileSalt, index: chunkIndex, plaintextSize: UInt64(plaintextSize))
-            let sealed = try AES.GCM.seal(plainChunk.prefix(toRead), using: fileKey, nonce: nonce, authenticating: aad)
-            var out = Data(capacity: toRead + tagSize)
-            out.append(sealed.ciphertext)
-            out.append(sealed.tag)
+            let out = try sealChunkV2(plainChunk.prefix(toRead), aesKey: aesKey, chachaKey: chachaKey, fileSalt: fileSalt, index: chunkIndex, plaintextSize: UInt64(plaintextSize))
             let ok = out.withUnsafeBytes { buf -> Bool in
                 guard let base = buf.baseAddress else { return false }
                 return writeFull(fd: outFd, buffer: base, count: out.count)
@@ -920,7 +1141,7 @@ public enum YougramChunkedFileCrypto {
             chunkIndex &+= 1
         }
 
-        let trailer = try makeTrailer(originalFileName: originalFileName, fileSalt: fileSalt, fileKey: fileKey)
+        let trailer = try makeTrailerV2(originalFileName: originalFileName, fileSalt: fileSalt, aesKey: aesKey, chachaKey: chachaKey)
         let trailerOk = trailer.withUnsafeBytes { buf -> Bool in
             guard let base = buf.baseAddress else { return false }
             return writeFull(fd: outFd, buffer: base, count: trailer.count)
@@ -1211,8 +1432,8 @@ public enum PostboxLocalEncryption {
     }
 
     @discardableResult
-    public static func activate(masterKey: Data) -> YougramVaultKeyMaterial {
-        let material = YougramVaultKeyMaterial(masterKey: masterKey)
+    public static func activate(masterKey: Data, version: Int = 2) -> YougramVaultKeyMaterial {
+        let material = YougramVaultKeyMaterial(masterKey: masterKey, version: version)
         self.lock.lock()
         let previous = self._current
         self._current = material
@@ -1230,11 +1451,18 @@ public enum PostboxLocalEncryption {
         self.ephemeralCache.purgeAllSessions()
     }
 
-    public static func hmacHex128(_ string: String, key: Data) -> String {
-        let mac = HMAC<SHA256>.authenticationCode(for: Data(string.utf8), using: SymmetricKey(data: key))
+    public static func hmacHex128(_ string: String, key: Data, useSHA512: Bool = false) -> String {
+        let bytes: [UInt8]
+        if useSHA512 {
+            let mac = HMAC<SHA512>.authenticationCode(for: Data(string.utf8), using: SymmetricKey(data: key))
+            bytes = Array(mac.prefix(16))
+        } else {
+            let mac = HMAC<SHA256>.authenticationCode(for: Data(string.utf8), using: SymmetricKey(data: key))
+            bytes = Array(mac.prefix(16))
+        }
         var result = ""
         result.reserveCapacity(32)
-        for byte in mac.prefix(16) {
+        for byte in bytes {
             result.append(String(format: "%02x", byte))
         }
         return result
@@ -1244,6 +1472,6 @@ public enum PostboxLocalEncryption {
         if logicalName.hasPrefix("enc_") {
             return logicalName
         }
-        return "enc_" + hmacHex128(logicalName, key: keys.mediaFilenameKey)
+        return "enc_" + hmacHex128(logicalName, key: keys.mediaFilenameKey, useSHA512: keys.version >= 2)
     }
 }

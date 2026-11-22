@@ -8,6 +8,9 @@ final class SharedAccountMediaManager {
     }
     
     private func fileNameForId(_ id: MediaResourceId) -> String {
+        if let keys = PostboxLocalEncryption.current {
+            return PostboxLocalEncryption.obfuscatedFileName(for: id.stringRepresentation, keys: keys)
+        }
         return "\(id.stringRepresentation)"
     }
     
@@ -16,10 +19,25 @@ final class SharedAccountMediaManager {
     }
     
     func resourceData(resourceId: MediaResourceId) -> Data? {
-        return try? Data(contentsOf: URL(fileURLWithPath: self.pathForId(resourceId)))
+        guard let raw = try? Data(contentsOf: URL(fileURLWithPath: self.pathForId(resourceId))) else {
+            return nil
+        }
+        if let keys = PostboxLocalEncryption.current {
+            return try? YougramEncryptedBlob.open(raw, key: keys.sharedMediaKey, aad: "ygsm:" + resourceId.stringRepresentation)
+        }
+        if YougramEncryptedBlob.isEncrypted(raw) {
+            return nil
+        }
+        return raw
     }
     
     func storeResourceData(resourceId: MediaResourceId, data: Data) {
+        if let keys = PostboxLocalEncryption.current {
+            if let sealed = try? YougramEncryptedBlob.seal(data, key: keys.sharedMediaKey, aad: "ygsm:" + resourceId.stringRepresentation) {
+                let _ = try? sealed.write(to: URL(fileURLWithPath: self.pathForId(resourceId)), options: [.atomic])
+            }
+            return
+        }
         let _ = try? data.write(to: URL(fileURLWithPath: self.pathForId(resourceId)))
     }
 }

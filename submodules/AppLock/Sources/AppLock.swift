@@ -155,6 +155,10 @@ public final class AppLockContextImpl: AppLockContext {
             self.currentStateValue = LockState()
         }
         self.autolockTimeout.set(self.currentStateValue.autolockTimeout)
+
+        YougramLocalEncryptionHooks.didUnlockFromVault = { [weak self] in
+            self?.unlock()
+        }
         
         self.disposable = (combineLatest(queue: .mainQueue(),
             accountManager.accessChallengeData(),
@@ -230,46 +234,54 @@ public final class AppLockContextImpl: AppLockContext {
                 
                 if isLocked(passcodeSettings: passcodeSettings, state: state) {
                     isCurrentlyLocked = true
-                    
-                    let biometrics: PasscodeEntryControllerBiometricsMode
-                    if passcodeSettings.enableBiometrics {
-                        biometrics = .enabled(passcodeSettings.biometricsDomainState)
-                    } else {
-                        biometrics = .none
-                    }
-                    
-                    if let passcodeController = strongSelf.passcodeController {
-                        if becameActiveRecently, !strongSelf.suppressAutomaticBiometrics, case .enabled = biometrics, isApplicationActive {
-                            passcodeController.requestBiometrics()
+
+                    if YougramVaultStore.shared.isEnabled(rootPath: strongSelf.rootPath),
+                       YougramLocalEncryptionHooks.handleAppLockTriggered?(state.isManuallyLocked) == true {
+                        if let passcodeController = strongSelf.passcodeController {
+                            strongSelf.passcodeController = nil
+                            passcodeController.dismiss()
                         }
-                        passcodeController.ensureInputFocused()
                     } else {
-                        let passcodeController = PasscodeEntryController(applicationBindings: strongSelf.applicationBindings, accountManager: strongSelf.accountManager, appLockContext: strongSelf, presentationData: presentationData, presentationDataSignal: strongSelf.presentationDataSignal, statusBarHost: window?.statusBarHost, challengeData: accessChallengeData.data, biometrics: biometrics, arguments: PasscodeEntryControllerPresentationArguments(animated: !becameActiveRecently || strongSelf.suppressAutomaticBiometrics, lockIconInitialFrame: {
-                            if let lockViewFrame = lockIconInitialFrame() {
-                                return lockViewFrame
-                            } else {
-                                return CGRect()
+                        let biometrics: PasscodeEntryControllerBiometricsMode
+                        if passcodeSettings.enableBiometrics {
+                            biometrics = .enabled(passcodeSettings.biometricsDomainState)
+                        } else {
+                            biometrics = .none
+                        }
+
+                        if let passcodeController = strongSelf.passcodeController {
+                            if becameActiveRecently, !strongSelf.suppressAutomaticBiometrics, case .enabled = biometrics, isApplicationActive {
+                                passcodeController.requestBiometrics()
                             }
-                        }))
-                        if becameActiveRecently, !strongSelf.suppressAutomaticBiometrics, isApplicationActive {
-                            passcodeController.presentationCompleted = { [weak self, weak passcodeController] in
-                                if case .enabled = biometrics, self?.suppressAutomaticBiometrics == false {
-                                    passcodeController?.requestBiometrics()
+                            passcodeController.ensureInputFocused()
+                        } else {
+                            let passcodeController = PasscodeEntryController(applicationBindings: strongSelf.applicationBindings, accountManager: strongSelf.accountManager, appLockContext: strongSelf, presentationData: presentationData, presentationDataSignal: strongSelf.presentationDataSignal, statusBarHost: window?.statusBarHost, challengeData: accessChallengeData.data, biometrics: biometrics, arguments: PasscodeEntryControllerPresentationArguments(animated: !becameActiveRecently || strongSelf.suppressAutomaticBiometrics, lockIconInitialFrame: {
+                                if let lockViewFrame = lockIconInitialFrame() {
+                                    return lockViewFrame
+                                } else {
+                                    return CGRect()
                                 }
-                                passcodeController?.ensureInputFocused()
+                            }))
+                            if becameActiveRecently, !strongSelf.suppressAutomaticBiometrics, isApplicationActive {
+                                passcodeController.presentationCompleted = { [weak self, weak passcodeController] in
+                                    if case .enabled = biometrics, self?.suppressAutomaticBiometrics == false {
+                                        passcodeController?.requestBiometrics()
+                                    }
+                                    passcodeController?.ensureInputFocused()
+                                }
                             }
-                        }
-                        passcodeController.presentedOverCoveringView = true
-                        passcodeController.isOpaqueWhenInOverlay = true
-                        strongSelf.passcodeController = passcodeController
-                        if let rootViewController = strongSelf.rootController {
-                            if let _ = rootViewController.presentedViewController as? UIActivityViewController {
-                            } else if let _ = rootViewController.presentedViewController as? PKPaymentAuthorizationViewController {
-                            } else {
-                                rootViewController.dismiss(animated: false, completion: nil)
+                            passcodeController.presentedOverCoveringView = true
+                            passcodeController.isOpaqueWhenInOverlay = true
+                            strongSelf.passcodeController = passcodeController
+                            if let rootViewController = strongSelf.rootController {
+                                if let _ = rootViewController.presentedViewController as? UIActivityViewController {
+                                } else if let _ = rootViewController.presentedViewController as? PKPaymentAuthorizationViewController {
+                                } else {
+                                    rootViewController.dismiss(animated: false, completion: nil)
+                                }
                             }
+                            strongSelf.window?.present(passcodeController, on: .passcode)
                         }
-                        strongSelf.window?.present(passcodeController, on: .passcode)
                     }
                 } else if let passcodeController = strongSelf.passcodeController {
                     strongSelf.passcodeController = nil

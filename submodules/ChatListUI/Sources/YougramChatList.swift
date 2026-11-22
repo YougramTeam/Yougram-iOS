@@ -67,16 +67,30 @@ func yougramDisablesStoryCameraSwipe() -> Bool {
 
 // MARK: Remember Last Folder
 
+private let yougramInMemoryFolderLock = NSLock()
+private var yougramInMemoryFolders: [Int64: Int64] = [:]
+
 private func yougramLastChatListFolderKey(accountId: AccountRecordId) -> String {
     return "yougram.chatList.lastFolder.\(accountId.int64)"
 }
 
 /// The folder open last on this account: nil before one was stored, `.all` for All Chats.
 func yougramLastChatListFolder(accountId: AccountRecordId) -> ChatListFilterTabEntryId? {
-    guard let value = UserDefaults.standard.object(forKey: yougramLastChatListFolderKey(accountId: accountId)) as? NSNumber else {
-        return nil
+    let id: Int64
+    if YougramCoreOptions.localEncryptionEnabled {
+        yougramInMemoryFolderLock.lock()
+        let memValue = yougramInMemoryFolders[accountId.int64]
+        yougramInMemoryFolderLock.unlock()
+        guard let memValue else {
+            return nil
+        }
+        id = memValue
+    } else {
+        guard let value = UserDefaults.standard.object(forKey: yougramLastChatListFolderKey(accountId: accountId)) as? NSNumber else {
+            return nil
+        }
+        id = value.int64Value
     }
-    let id = value.int64Value
     if id < 0 {
         return .all
     } else {
@@ -93,6 +107,15 @@ func yougramStoreLastChatListFolder(accountId: AccountRecordId, filter: ChatList
         value = Int64(id)
     }
     let key = yougramLastChatListFolderKey(accountId: accountId)
+    if YougramCoreOptions.localEncryptionEnabled {
+        yougramInMemoryFolderLock.lock()
+        yougramInMemoryFolders[accountId.int64] = value
+        yougramInMemoryFolderLock.unlock()
+        if UserDefaults.standard.object(forKey: key) != nil {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        return
+    }
     if (UserDefaults.standard.object(forKey: key) as? NSNumber)?.int64Value != value {
         UserDefaults.standard.set(NSNumber(value: value), forKey: key)
     }

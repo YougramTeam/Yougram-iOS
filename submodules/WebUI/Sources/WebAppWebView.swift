@@ -136,7 +136,9 @@ final class WebAppWebView: WKWebView {
     init(account: Account) {
         let configuration = WKWebViewConfiguration()
                 
-        if #available(iOS 17.0, *) {
+        if YougramCoreOptions.localEncryptionEnabled {
+            configuration.websiteDataStore = .nonPersistent()
+        } else if #available(iOS 17.0, *) {
             var uuid: UUID?
             if let current = UserDefaults.standard.object(forKey: "TelegramWebStoreUUID_\(account.id.int64)") as? String {
                 uuid = UUID(uuidString: current)!

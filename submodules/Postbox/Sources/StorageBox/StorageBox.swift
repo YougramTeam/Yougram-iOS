@@ -1226,4 +1226,11 @@ public final class StorageBox {
             throw rekeyError
         }
     }
+
+    public func checkpointAndClearCaches(completion: @escaping () -> Void = {}) {
+        self.impl.with { impl in
+            impl.valueBox.checkpointAndPurgeMemory()
+            completion()
+        }
+    }
 }

@@ -79,6 +79,9 @@ public enum YougramVaultMigrationState: String, Codable, Equatable, Sendable {
 
 public struct YougramVaultManifest: Codable, Equatable, Sendable {
     public var version: Int
+    public var kdfVersion: Int
+    public var kdfMemoryBlocks: Int
+    public var kdfRounds: Int
     public var unlockMode: YougramVaultUnlockMode
     public var salt: Data?
     public var iterations: Int
@@ -90,12 +93,38 @@ public struct YougramVaultManifest: Codable, Equatable, Sendable {
     public var scrambledKeypad: Bool
     public var duressSalt: Data?
     public var duressHash: Data?
+    public var duressKdfVersion: Int
     public var failedAttempts: Int
     public var cooldownUntil: TimeInterval
     public var migrationState: YougramVaultMigrationState
 
+    enum CodingKeys: String, CodingKey {
+        case version
+        case kdfVersion
+        case kdfMemoryBlocks
+        case kdfRounds
+        case unlockMode
+        case salt
+        case iterations
+        case wrappedMasterKey
+        case pepperVersion
+        case allowBackgroundExtensions
+        case biometricsEnabled
+        case autoLockTimeout
+        case scrambledKeypad
+        case duressSalt
+        case duressHash
+        case duressKdfVersion
+        case failedAttempts
+        case cooldownUntil
+        case migrationState
+    }
+
     public init(
-        version: Int = 1,
+        version: Int = 2,
+        kdfVersion: Int = 2,
+        kdfMemoryBlocks: Int = YougramVaultStore.defaultMemoryBlocks,
+        kdfRounds: Int = YougramVaultStore.defaultKdfRounds,
         unlockMode: YougramVaultUnlockMode,
         salt: Data?,
         iterations: Int,
@@ -107,11 +136,15 @@ public struct YougramVaultManifest: Codable, Equatable, Sendable {
         scrambledKeypad: Bool = false,
         duressSalt: Data? = nil,
         duressHash: Data? = nil,
+        duressKdfVersion: Int = 2,
         failedAttempts: Int = 0,
         cooldownUntil: TimeInterval = 0,
         migrationState: YougramVaultMigrationState = .none
     ) {
         self.version = version
+        self.kdfVersion = kdfVersion
+        self.kdfMemoryBlocks = kdfMemoryBlocks
+        self.kdfRounds = kdfRounds
         self.unlockMode = unlockMode
         self.salt = salt
         self.iterations = iterations
@@ -123,9 +156,33 @@ public struct YougramVaultManifest: Codable, Equatable, Sendable {
         self.scrambledKeypad = scrambledKeypad
         self.duressSalt = duressSalt
         self.duressHash = duressHash
+        self.duressKdfVersion = duressKdfVersion
         self.failedAttempts = failedAttempts
         self.cooldownUntil = cooldownUntil
         self.migrationState = migrationState
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        self.kdfVersion = try c.decodeIfPresent(Int.self, forKey: .kdfVersion) ?? 1
+        self.kdfMemoryBlocks = try c.decodeIfPresent(Int.self, forKey: .kdfMemoryBlocks) ?? 0
+        self.kdfRounds = try c.decodeIfPresent(Int.self, forKey: .kdfRounds) ?? 0
+        self.unlockMode = try c.decode(YougramVaultUnlockMode.self, forKey: .unlockMode)
+        self.salt = try c.decodeIfPresent(Data.self, forKey: .salt)
+        self.iterations = try c.decodeIfPresent(Int.self, forKey: .iterations) ?? 0
+        self.wrappedMasterKey = try c.decode(Data.self, forKey: .wrappedMasterKey)
+        self.pepperVersion = try c.decodeIfPresent(Int.self, forKey: .pepperVersion) ?? 1
+        self.allowBackgroundExtensions = try c.decodeIfPresent(Bool.self, forKey: .allowBackgroundExtensions) ?? false
+        self.biometricsEnabled = try c.decodeIfPresent(Bool.self, forKey: .biometricsEnabled) ?? false
+        self.autoLockTimeout = try c.decodeIfPresent(Int32.self, forKey: .autoLockTimeout)
+        self.scrambledKeypad = try c.decodeIfPresent(Bool.self, forKey: .scrambledKeypad) ?? false
+        self.duressSalt = try c.decodeIfPresent(Data.self, forKey: .duressSalt)
+        self.duressHash = try c.decodeIfPresent(Data.self, forKey: .duressHash)
+        self.duressKdfVersion = try c.decodeIfPresent(Int.self, forKey: .duressKdfVersion) ?? 1
+        self.failedAttempts = try c.decodeIfPresent(Int.self, forKey: .failedAttempts) ?? 0
+        self.cooldownUntil = try c.decodeIfPresent(TimeInterval.self, forKey: .cooldownUntil) ?? 0
+        self.migrationState = try c.decodeIfPresent(YougramVaultMigrationState.self, forKey: .migrationState) ?? .none
     }
 }
 
@@ -144,13 +201,15 @@ public enum YougramVaultError: Error, Equatable {
     case unavailable
 }
 
-/// Static hooks registered by TelegramUI's coordinator so Settings can drive live
-/// migration and lock without circular module dependencies.
+/// Static hooks registered by TelegramUI's coordinator and AppLock so Settings,
+/// AppLock, and Local Encryption stay in sync without circular module dependencies.
 public enum YougramLocalEncryptionHooks {
     public static var currentRootPath: (() -> String?)?
     public static var performLiveEnable: ((_ masterKey: Data, _ completion: @escaping (Result<Void, Error>) -> Void) -> Void)?
     public static var performLiveDisable: ((_ masterKey: Data, _ completion: @escaping (Result<Void, Error>) -> Void) -> Void)?
     public static var lockNow: (() -> Void)?
+    public static var handleAppLockTriggered: ((_ isManualLock: Bool) -> Bool)?
+    public static var didUnlockFromVault: (() -> Void)?
 }
 
 @available(macOS 10.15, *)
@@ -165,7 +224,12 @@ public final class YougramVaultStore: @unchecked Sendable {
     private static let extensionService = "com.yougram.vault.ext.v1"
     private static let extensionAccount = "ext.vmk.v1"
 
+    public static let defaultVersion = 2
+    public static let defaultKdfVersion = 2
     public static let defaultIterations = 310_000
+    public static let defaultIterationsV2 = 600_000
+    public static let defaultMemoryBlocks = 262_144 // 262,144 * 64B = 16 MiB
+    public static let defaultKdfRounds = 3
     public static let vaultPasscodeDomain = "vmk.v1"
 
     private struct PepperRecord: Codable {
@@ -274,15 +338,25 @@ public final class YougramVaultStore: @unchecked Sendable {
 
         let masterKey = try existingMasterKey.map { Data($0) } ?? Self.randomBytes(32)
         let salt = try Self.randomBytes(32)
-        var kek = try Self.deriveDedicatedKEK(secret: kind.normalize(secret), salt: salt, iterations: Self.defaultIterations, pepper: pepper)
-        defer { Self.zeroize(&kek) }
+        var kek64 = try Self.deriveDedicatedKEK64(
+            secret: kind.normalize(secret),
+            salt: salt,
+            iterations: Self.defaultIterationsV2,
+            memoryBlocks: Self.defaultMemoryBlocks,
+            rounds: Self.defaultKdfRounds,
+            pepper: pepper
+        )
+        defer { Self.zeroize(&kek64) }
 
-        let wrapped = try Self.aesGcmSeal(masterKey, key: kek, aad: "yougram.vmk.dedicated.v1")
+        let wrapped = try Self.cascadeSeal(masterKey, key64: kek64, aad: "yougram.vmk.dedicated.v2")
         let manifest = YougramVaultManifest(
-            version: 1,
+            version: Self.defaultVersion,
+            kdfVersion: Self.defaultKdfVersion,
+            kdfMemoryBlocks: Self.defaultMemoryBlocks,
+            kdfRounds: Self.defaultKdfRounds,
             unlockMode: .dedicated(kind),
             salt: salt,
-            iterations: Self.defaultIterations,
+            iterations: Self.defaultIterationsV2,
             wrappedMasterKey: wrapped,
             pepperVersion: 1,
             allowBackgroundExtensions: allowBackgroundExtensions,
@@ -304,17 +378,28 @@ public final class YougramVaultStore: @unchecked Sendable {
         defer { Self.zeroize(&pepper) }
 
         let masterKey = try existingMasterKey.map { Data($0) } ?? Self.randomBytes(32)
+        let salt = try Self.randomBytes(32)
         let wrapped = try PasscodeCredentialStore.shared.withVaultKey(session: session, domain: Self.vaultPasscodeDomain) { sessionKey in
-            var kek = Self.combineSessionKey(sessionKey, pepper: pepper)
-            defer { Self.zeroize(&kek) }
-            return try Self.aesGcmSeal(masterKey, key: kek, aad: "yougram.vmk.passcode.v1")
+            var kek64 = try Self.derivePasscodeKEK64(
+                sessionKey: sessionKey,
+                salt: salt,
+                iterations: Self.defaultIterationsV2,
+                memoryBlocks: Self.defaultMemoryBlocks,
+                rounds: Self.defaultKdfRounds,
+                pepper: pepper
+            )
+            defer { Self.zeroize(&kek64) }
+            return try Self.cascadeSeal(masterKey, key64: kek64, aad: "yougram.vmk.passcode.v2")
         }
 
         let manifest = YougramVaultManifest(
-            version: 1,
+            version: Self.defaultVersion,
+            kdfVersion: Self.defaultKdfVersion,
+            kdfMemoryBlocks: Self.defaultMemoryBlocks,
+            kdfRounds: Self.defaultKdfRounds,
             unlockMode: .appPasscode,
-            salt: nil,
-            iterations: 0,
+            salt: salt,
+            iterations: Self.defaultIterationsV2,
             wrappedMasterKey: wrapped,
             pepperVersion: 1,
             allowBackgroundExtensions: allowBackgroundExtensions,
@@ -381,6 +466,30 @@ public final class YougramVaultStore: @unchecked Sendable {
         return Int(min(300, ceil(remaining)))
     }
 
+    private static func unwrapDedicatedMasterKey(secret normalized: String, manifest: YougramVaultManifest, pepper: Data) throws -> Data {
+        guard let salt = manifest.salt, manifest.iterations > 0 else {
+            throw YougramVaultError.corrupted
+        }
+        if manifest.kdfVersion >= 2 {
+            let blocks = manifest.kdfMemoryBlocks > 0 ? manifest.kdfMemoryBlocks : Self.defaultMemoryBlocks
+            let rounds = manifest.kdfRounds > 0 ? manifest.kdfRounds : Self.defaultKdfRounds
+            var kek64 = try Self.deriveDedicatedKEK64(
+                secret: normalized,
+                salt: salt,
+                iterations: manifest.iterations,
+                memoryBlocks: blocks,
+                rounds: rounds,
+                pepper: pepper
+            )
+            defer { Self.zeroize(&kek64) }
+            return try Self.cascadeOpen(manifest.wrappedMasterKey, key64: kek64, aad: "yougram.vmk.dedicated.v2")
+        } else {
+            var kek = try Self.deriveDedicatedKEK(secret: normalized, salt: salt, iterations: manifest.iterations, pepper: pepper)
+            defer { Self.zeroize(&kek) }
+            return try Self.aesGcmOpen(manifest.wrappedMasterKey, key: kek, aad: "yougram.vmk.dedicated.v1")
+        }
+    }
+
     public func unlockWithDedicatedSecret(_ secret: String, rootPath: String) throws -> Data {
         guard var manifest = self.loadManifest(rootPath: rootPath) else {
             throw YougramVaultError.notEnabled
@@ -393,7 +502,7 @@ public final class YougramVaultStore: @unchecked Sendable {
 
         // Always check dedicated duress code before checking cooldown or recording failures.
         if let duressSalt = manifest.duressSalt, let duressHash = manifest.duressHash {
-            if Self.verifyDedicatedDuressSecret(normalized, salt: duressSalt, hash: duressHash) {
+            if Self.verifyDedicatedDuressSecret(normalized, salt: duressSalt, hash: duressHash, kdfVersion: manifest.duressKdfVersion) {
                 throw YougramVaultError.duressTriggered
             }
         }
@@ -403,26 +512,45 @@ public final class YougramVaultStore: @unchecked Sendable {
             throw YougramVaultError.cooldown(remainingSeconds: remaining)
         }
 
-        guard let salt = manifest.salt, manifest.iterations > 0 else {
-            throw YougramVaultError.corrupted
-        }
         var pepper = try self.loadExistingHardwarePepper()
         defer { Self.zeroize(&pepper) }
 
-        var kek = try Self.deriveDedicatedKEK(secret: normalized, salt: salt, iterations: manifest.iterations, pepper: pepper)
-        defer { Self.zeroize(&kek) }
-
         do {
-            let masterKey = try Self.aesGcmOpen(manifest.wrappedMasterKey, key: kek, aad: "yougram.vmk.dedicated.v1")
+            let masterKey = try Self.unwrapDedicatedMasterKey(secret: normalized, manifest: manifest, pepper: pepper)
+            var needsSave = false
             if manifest.failedAttempts != 0 || manifest.cooldownUntil != 0 {
                 manifest.failedAttempts = 0
                 manifest.cooldownUntil = 0
-                try self.saveManifest(manifest, rootPath: rootPath)
+                needsSave = true
             }
-            YougramLocalEncryptionBridge.activate(masterKey: masterKey)
+            if manifest.kdfVersion < Self.defaultKdfVersion {
+                let newSalt = try Self.randomBytes(32)
+                var newKek64 = try Self.deriveDedicatedKEK64(
+                    secret: normalized,
+                    salt: newSalt,
+                    iterations: Self.defaultIterationsV2,
+                    memoryBlocks: Self.defaultMemoryBlocks,
+                    rounds: Self.defaultKdfRounds,
+                    pepper: pepper
+                )
+                defer { Self.zeroize(&newKek64) }
+                manifest.wrappedMasterKey = try Self.cascadeSeal(masterKey, key64: newKek64, aad: "yougram.vmk.dedicated.v2")
+                manifest.salt = newSalt
+                manifest.iterations = Self.defaultIterationsV2
+                manifest.kdfVersion = Self.defaultKdfVersion
+                manifest.kdfMemoryBlocks = Self.defaultMemoryBlocks
+                manifest.kdfRounds = Self.defaultKdfRounds
+                needsSave = true
+            }
+            if needsSave {
+                try? self.saveManifest(manifest, rootPath: rootPath)
+            }
+            YougramLocalEncryptionBridge.activate(masterKey: masterKey, version: manifest.version)
             try? self.syncExtensionKeychainItem(allow: manifest.allowBackgroundExtensions, masterKey: masterKey)
             self.setUnlockedMasterKey(masterKey)
             return masterKey
+        } catch let error as YougramVaultError where error == .corrupted {
+            throw error
         } catch {
             manifest.failedAttempts = min(1_000_000, manifest.failedAttempts + 1)
             let penalty = Self.cooldownDuration(forFailures: manifest.failedAttempts)
@@ -453,14 +581,14 @@ public final class YougramVaultStore: @unchecked Sendable {
             manifest.cooldownUntil = 0
             try? self.saveManifest(manifest, rootPath: rootPath)
         }
-        YougramLocalEncryptionBridge.activate(masterKey: masterKey)
+        YougramLocalEncryptionBridge.activate(masterKey: masterKey, version: manifest.version)
         try? self.syncExtensionKeychainItem(allow: manifest.allowBackgroundExtensions, masterKey: masterKey)
         self.setUnlockedMasterKey(masterKey)
         return masterKey
     }
 
     public func unlockWithAppPasscodeSession(_ session: PasscodeSession, rootPath: String) throws -> Data {
-        guard let manifest = self.loadManifest(rootPath: rootPath) else {
+        guard var manifest = self.loadManifest(rootPath: rootPath) else {
             throw YougramVaultError.notEnabled
         }
         guard case .appPasscode = manifest.unlockMode else {
@@ -469,12 +597,52 @@ public final class YougramVaultStore: @unchecked Sendable {
         var pepper = try self.loadExistingHardwarePepper()
         defer { Self.zeroize(&pepper) }
 
-        let masterKey = try PasscodeCredentialStore.shared.withVaultKey(session: session, domain: Self.vaultPasscodeDomain) { sessionKey in
-            var kek = Self.combineSessionKey(sessionKey, pepper: pepper)
-            defer { Self.zeroize(&kek) }
-            return try Self.aesGcmOpen(manifest.wrappedMasterKey, key: kek, aad: "yougram.vmk.passcode.v1")
+        let masterKey: Data = try PasscodeCredentialStore.shared.withVaultKey(session: session, domain: Self.vaultPasscodeDomain) { sessionKey in
+            if manifest.kdfVersion >= 2 {
+                guard let salt = manifest.salt, manifest.iterations > 0 else {
+                    throw YougramVaultError.corrupted
+                }
+                let blocks = manifest.kdfMemoryBlocks > 0 ? manifest.kdfMemoryBlocks : Self.defaultMemoryBlocks
+                let rounds = manifest.kdfRounds > 0 ? manifest.kdfRounds : Self.defaultKdfRounds
+                var kek64 = try Self.derivePasscodeKEK64(
+                    sessionKey: sessionKey,
+                    salt: salt,
+                    iterations: manifest.iterations,
+                    memoryBlocks: blocks,
+                    rounds: rounds,
+                    pepper: pepper
+                )
+                defer { Self.zeroize(&kek64) }
+                return try Self.cascadeOpen(manifest.wrappedMasterKey, key64: kek64, aad: "yougram.vmk.passcode.v2")
+            } else {
+                var kek = Self.combineSessionKey(sessionKey, pepper: pepper)
+                defer { Self.zeroize(&kek) }
+                return try Self.aesGcmOpen(manifest.wrappedMasterKey, key: kek, aad: "yougram.vmk.passcode.v1")
+            }
         }
-        YougramLocalEncryptionBridge.activate(masterKey: masterKey)
+        if manifest.kdfVersion < Self.defaultKdfVersion {
+            let newSalt = try Self.randomBytes(32)
+            let upgradedWrapped = try PasscodeCredentialStore.shared.withVaultKey(session: session, domain: Self.vaultPasscodeDomain) { sessionKey in
+                var newKek64 = try Self.derivePasscodeKEK64(
+                    sessionKey: sessionKey,
+                    salt: newSalt,
+                    iterations: Self.defaultIterationsV2,
+                    memoryBlocks: Self.defaultMemoryBlocks,
+                    rounds: Self.defaultKdfRounds,
+                    pepper: pepper
+                )
+                defer { Self.zeroize(&newKek64) }
+                return try Self.cascadeSeal(masterKey, key64: newKek64, aad: "yougram.vmk.passcode.v2")
+            }
+            manifest.wrappedMasterKey = upgradedWrapped
+            manifest.salt = newSalt
+            manifest.iterations = Self.defaultIterationsV2
+            manifest.kdfVersion = Self.defaultKdfVersion
+            manifest.kdfMemoryBlocks = Self.defaultMemoryBlocks
+            manifest.kdfRounds = Self.defaultKdfRounds
+            try? self.saveManifest(manifest, rootPath: rootPath)
+        }
+        YougramLocalEncryptionBridge.activate(masterKey: masterKey, version: manifest.version)
         try? self.syncExtensionKeychainItem(allow: manifest.allowBackgroundExtensions, masterKey: masterKey)
         self.setUnlockedMasterKey(masterKey)
         return masterKey
@@ -503,8 +671,9 @@ public final class YougramVaultStore: @unchecked Sendable {
         guard newKind.isValidFormat(newSecret) else {
             throw YougramVaultError.invalidFormat
         }
+        let normalized = newKind.normalize(newSecret)
         if let duressSalt = manifest.duressSalt, let duressHash = manifest.duressHash {
-            if Self.verifyDedicatedDuressSecret(newKind.normalize(newSecret), salt: duressSalt, hash: duressHash) {
+            if Self.verifyDedicatedDuressSecret(normalized, salt: duressSalt, hash: duressHash, kdfVersion: manifest.duressKdfVersion) {
                 throw YougramVaultError.matchesPasscode
             }
         }
@@ -512,13 +681,23 @@ public final class YougramVaultStore: @unchecked Sendable {
         defer { Self.zeroize(&pepper) }
 
         let newSalt = try Self.randomBytes(32)
-        var newKek = try Self.deriveDedicatedKEK(secret: newKind.normalize(newSecret), salt: newSalt, iterations: Self.defaultIterations, pepper: pepper)
-        defer { Self.zeroize(&newKek) }
+        var newKek64 = try Self.deriveDedicatedKEK64(
+            secret: normalized,
+            salt: newSalt,
+            iterations: Self.defaultIterationsV2,
+            memoryBlocks: Self.defaultMemoryBlocks,
+            rounds: Self.defaultKdfRounds,
+            pepper: pepper
+        )
+        defer { Self.zeroize(&newKek64) }
 
         manifest.unlockMode = .dedicated(newKind)
+        manifest.kdfVersion = Self.defaultKdfVersion
+        manifest.kdfMemoryBlocks = Self.defaultMemoryBlocks
+        manifest.kdfRounds = Self.defaultKdfRounds
         manifest.salt = newSalt
-        manifest.iterations = Self.defaultIterations
-        manifest.wrappedMasterKey = try Self.aesGcmSeal(currentMasterKey, key: newKek, aad: "yougram.vmk.dedicated.v1")
+        manifest.iterations = Self.defaultIterationsV2
+        manifest.wrappedMasterKey = try Self.cascadeSeal(currentMasterKey, key64: newKek64, aad: "yougram.vmk.dedicated.v2")
         manifest.failedAttempts = 0
         manifest.cooldownUntil = 0
         try self.saveManifest(manifest, rootPath: rootPath)
@@ -531,23 +710,35 @@ public final class YougramVaultStore: @unchecked Sendable {
         var pepper = try self.loadOrCreateHardwarePepper()
         defer { Self.zeroize(&pepper) }
 
+        let newSalt = try Self.randomBytes(32)
         let wrapped = try PasscodeCredentialStore.shared.withVaultKey(session: session, domain: Self.vaultPasscodeDomain) { sessionKey in
-            var kek = Self.combineSessionKey(sessionKey, pepper: pepper)
-            defer { Self.zeroize(&kek) }
-            return try Self.aesGcmSeal(currentMasterKey, key: kek, aad: "yougram.vmk.passcode.v1")
+            var kek64 = try Self.derivePasscodeKEK64(
+                sessionKey: sessionKey,
+                salt: newSalt,
+                iterations: Self.defaultIterationsV2,
+                memoryBlocks: Self.defaultMemoryBlocks,
+                rounds: Self.defaultKdfRounds,
+                pepper: pepper
+            )
+            defer { Self.zeroize(&kek64) }
+            return try Self.cascadeSeal(currentMasterKey, key64: kek64, aad: "yougram.vmk.passcode.v2")
         }
         try PasscodeCredentialStore.shared.setVaultProtectionEnabled(true, session: session)
         try? self.deleteBiometricKeychainItem()
 
         manifest.unlockMode = .appPasscode
-        manifest.salt = nil
-        manifest.iterations = 0
+        manifest.kdfVersion = Self.defaultKdfVersion
+        manifest.kdfMemoryBlocks = Self.defaultMemoryBlocks
+        manifest.kdfRounds = Self.defaultKdfRounds
+        manifest.salt = newSalt
+        manifest.iterations = Self.defaultIterationsV2
         manifest.wrappedMasterKey = wrapped
         manifest.biometricsEnabled = false
         manifest.autoLockTimeout = nil
         manifest.scrambledKeypad = scrambledKeypad
         manifest.duressSalt = nil
         manifest.duressHash = nil
+        manifest.duressKdfVersion = 2
         manifest.failedAttempts = 0
         manifest.cooldownUntil = 0
         try self.saveManifest(manifest, rootPath: rootPath)
@@ -570,13 +761,23 @@ public final class YougramVaultStore: @unchecked Sendable {
         defer { Self.zeroize(&pepper) }
 
         let newSalt = try Self.randomBytes(32)
-        var kek = try Self.deriveDedicatedKEK(secret: newKind.normalize(newSecret), salt: newSalt, iterations: Self.defaultIterations, pepper: pepper)
-        defer { Self.zeroize(&kek) }
+        var kek64 = try Self.deriveDedicatedKEK64(
+            secret: newKind.normalize(newSecret),
+            salt: newSalt,
+            iterations: Self.defaultIterationsV2,
+            memoryBlocks: Self.defaultMemoryBlocks,
+            rounds: Self.defaultKdfRounds,
+            pepper: pepper
+        )
+        defer { Self.zeroize(&kek64) }
 
         manifest.unlockMode = .dedicated(newKind)
+        manifest.kdfVersion = Self.defaultKdfVersion
+        manifest.kdfMemoryBlocks = Self.defaultMemoryBlocks
+        manifest.kdfRounds = Self.defaultKdfRounds
         manifest.salt = newSalt
-        manifest.iterations = Self.defaultIterations
-        manifest.wrappedMasterKey = try Self.aesGcmSeal(currentMasterKey, key: kek, aad: "yougram.vmk.dedicated.v1")
+        manifest.iterations = Self.defaultIterationsV2
+        manifest.wrappedMasterKey = try Self.cascadeSeal(currentMasterKey, key64: kek64, aad: "yougram.vmk.dedicated.v2")
         manifest.failedAttempts = 0
         manifest.cooldownUntil = 0
         try self.saveManifest(manifest, rootPath: rootPath)
@@ -643,19 +844,18 @@ public final class YougramVaultStore: @unchecked Sendable {
                 throw YougramVaultError.matchesPasscode
             }
             // Verify against existing wrappedMasterKey so duress code can never silently match unlock secret.
-            if let salt = manifest.salt, manifest.iterations > 0, var pepper = try? self.loadExistingHardwarePepper() {
+            if var pepper = try? self.loadExistingHardwarePepper() {
                 defer { Self.zeroize(&pepper) }
-                if var kek = try? Self.deriveDedicatedKEK(secret: normalized, salt: salt, iterations: manifest.iterations, pepper: pepper) {
-                    defer { Self.zeroize(&kek) }
-                    if (try? Self.aesGcmOpen(manifest.wrappedMasterKey, key: kek, aad: "yougram.vmk.dedicated.v1")) != nil {
-                        throw YougramVaultError.matchesPasscode
-                    }
+                if var unlocked = try? Self.unwrapDedicatedMasterKey(secret: normalized, manifest: manifest, pepper: pepper) {
+                    Self.zeroize(&unlocked)
+                    throw YougramVaultError.matchesPasscode
                 }
             }
             let duressSalt = try Self.randomBytes(32)
-            let duressHash = try Self.pbkdf2(password: Data(normalized.utf8), salt: duressSalt, iterations: Self.defaultIterations, count: 32)
+            let duressHash = try Self.deriveDedicatedDuressHashV2(normalized, salt: duressSalt)
             manifest.duressSalt = duressSalt
             manifest.duressHash = duressHash
+            manifest.duressKdfVersion = 2
         } else {
             manifest.duressSalt = nil
             manifest.duressHash = nil
@@ -1054,13 +1254,179 @@ public final class YougramVaultStore: @unchecked Sendable {
         return try Self.pbkdf2(password: secretData, salt: kdfSalt, iterations: iterations, count: 32)
     }
 
+    private static func deriveDedicatedKEK64(
+        secret: String,
+        salt: Data,
+        iterations: Int,
+        memoryBlocks: Int,
+        rounds: Int,
+        pepper: Data
+    ) throws -> Data {
+        guard pepper.count == 32, salt.count >= 16, iterations >= 100_000 else {
+            throw YougramVaultError.corrupted
+        }
+        let kdfSalt = Data(HMAC<SHA512>.authenticationCode(for: salt, using: SymmetricKey(data: pepper)))
+        var secretData = Data(("yougram.vault.secret.v2\0" + secret).utf8)
+        defer { Self.zeroize(&secretData) }
+        var balloonOut = Self.balloonSHA512(password: secretData, salt: kdfSalt, blocks: memoryBlocks, rounds: rounds)
+        defer { Self.zeroize(&balloonOut) }
+        return try Self.pbkdf2(
+            password: balloonOut,
+            salt: kdfSalt,
+            iterations: iterations,
+            count: 64,
+            algorithm: CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA512)
+        )
+    }
+
+    private static func derivePasscodeKEK64(
+        sessionKey: Data,
+        salt: Data,
+        iterations: Int,
+        memoryBlocks: Int,
+        rounds: Int,
+        pepper: Data
+    ) throws -> Data {
+        guard pepper.count == 32, salt.count >= 16, iterations >= 100_000 else {
+            throw YougramVaultError.corrupted
+        }
+        let kdfSalt = Data(HMAC<SHA512>.authenticationCode(for: salt, using: SymmetricKey(data: pepper)))
+        var secretInput = Data("yougram.vmk.appPasscode.v2\0".utf8)
+        secretInput.append(pepper)
+        var mixedKey = Data(HMAC<SHA512>.authenticationCode(for: secretInput, using: SymmetricKey(data: sessionKey)))
+        Self.zeroize(&secretInput)
+        defer { Self.zeroize(&mixedKey) }
+        var balloonOut = Self.balloonSHA512(password: mixedKey, salt: kdfSalt, blocks: memoryBlocks, rounds: rounds)
+        defer { Self.zeroize(&balloonOut) }
+        return try Self.pbkdf2(
+            password: balloonOut,
+            salt: kdfSalt,
+            iterations: iterations,
+            count: 64,
+            algorithm: CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA512)
+        )
+    }
+
     private static func combineSessionKey(_ sessionKey: Data, pepper: Data) -> Data {
         var input = Data("yougram.vmk.appPasscode.v1".utf8)
         input.append(pepper)
         return Data(HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: sessionKey)))
     }
 
-    private static func pbkdf2(password: Data, salt: Data, iterations: Int, count: Int) throws -> Data {
+    /// Memory-hard Balloon-SHA512 KDF (262,144 x 64-byte blocks = 16 MiB, 3 rounds by default).
+    private static func balloonSHA512(password: Data, salt: Data, blocks: Int, rounds: Int) -> Data {
+        let blockSize = 64
+        let safeBlocks = max(1, blocks)
+        let safeRounds = max(1, rounds)
+        let byteCount = safeBlocks * blockSize
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: byteCount)
+        buf.initialize(repeating: 0, count: byteCount)
+        defer {
+            memset(buf, 0, byteCount)
+            buf.deallocate()
+        }
+
+        var ctx = CC_SHA512_CTX()
+        var counterLE: UInt64 = 0
+
+        @inline(__always)
+        func beginCounterHash(_ c: inout CC_SHA512_CTX, _ counter: inout UInt64) {
+            _ = CC_SHA512_Init(&c)
+            var le = counter.littleEndian
+            withUnsafeBytes(of: &le) { raw in
+                if let base = raw.baseAddress {
+                    _ = CC_SHA512_Update(&c, base, 8)
+                }
+            }
+            counter &+= 1
+        }
+
+        beginCounterHash(&ctx, &counterLE)
+        password.withUnsafeBytes { raw in
+            if let base = raw.baseAddress, raw.count > 0 {
+                _ = CC_SHA512_Update(&ctx, base, CC_LONG(raw.count))
+            }
+        }
+        salt.withUnsafeBytes { raw in
+            if let base = raw.baseAddress, raw.count > 0 {
+                _ = CC_SHA512_Update(&ctx, base, CC_LONG(raw.count))
+            }
+        }
+        _ = CC_SHA512_Final(buf, &ctx)
+
+        for m in 1 ..< safeBlocks {
+            beginCounterHash(&ctx, &counterLE)
+            _ = CC_SHA512_Update(&ctx, buf.advanced(by: (m - 1) * blockSize), CC_LONG(blockSize))
+            _ = CC_SHA512_Final(buf.advanced(by: m * blockSize), &ctx)
+        }
+
+        var idxSeed = [UInt8](repeating: 0, count: 16)
+        var idxDigest = [UInt8](repeating: 0, count: blockSize)
+        let blocksU64 = UInt64(safeBlocks)
+
+        for r in 0 ..< safeRounds {
+            var rLE = UInt64(r).littleEndian
+            withUnsafeBytes(of: &rLE) { raw in
+                for k in 0 ..< 8 { idxSeed[k] = raw[k] }
+            }
+            for m in 0 ..< safeBlocks {
+                var mLE = UInt64(m).littleEndian
+                withUnsafeBytes(of: &mLE) { raw in
+                    for k in 0 ..< 8 { idxSeed[8 + k] = raw[k] }
+                }
+
+                _ = CC_SHA512_Init(&ctx)
+                salt.withUnsafeBytes { raw in
+                    if let base = raw.baseAddress, raw.count > 0 {
+                        _ = CC_SHA512_Update(&ctx, base, CC_LONG(raw.count))
+                    }
+                }
+                idxSeed.withUnsafeBufferPointer { ptr in
+                    if let base = ptr.baseAddress {
+                        _ = CC_SHA512_Update(&ctx, base, 16)
+                    }
+                }
+                _ = CC_SHA512_Final(&idxDigest, &ctx)
+
+                var i0: UInt64 = 0
+                var i1: UInt64 = 0
+                var i2: UInt64 = 0
+                idxDigest.withUnsafeBytes { raw in
+                    if let base = raw.baseAddress {
+                        memcpy(&i0, base, 8)
+                        memcpy(&i1, base.advanced(by: 8), 8)
+                        memcpy(&i2, base.advanced(by: 16), 8)
+                    }
+                }
+                let prevIndex = (m == 0) ? (safeBlocks - 1) : (m - 1)
+                let idx0 = Int(UInt64(littleEndian: i0) % blocksU64)
+                let idx1 = Int(UInt64(littleEndian: i1) % blocksU64)
+                let idx2 = Int(UInt64(littleEndian: i2) % blocksU64)
+
+                beginCounterHash(&ctx, &counterLE)
+                _ = CC_SHA512_Update(&ctx, buf.advanced(by: prevIndex * blockSize), CC_LONG(blockSize))
+                _ = CC_SHA512_Update(&ctx, buf.advanced(by: m * blockSize), CC_LONG(blockSize))
+                _ = CC_SHA512_Update(&ctx, buf.advanced(by: idx0 * blockSize), CC_LONG(blockSize))
+                _ = CC_SHA512_Update(&ctx, buf.advanced(by: idx1 * blockSize), CC_LONG(blockSize))
+                _ = CC_SHA512_Update(&ctx, buf.advanced(by: idx2 * blockSize), CC_LONG(blockSize))
+                _ = CC_SHA512_Final(buf.advanced(by: m * blockSize), &ctx)
+            }
+        }
+
+        memset(&ctx, 0, MemoryLayout<CC_SHA512_CTX>.size)
+        idxDigest.withUnsafeMutableBufferPointer { ptr in
+            if let base = ptr.baseAddress { memset(base, 0, ptr.count) }
+        }
+        return Data(bytes: buf.advanced(by: (safeBlocks - 1) * blockSize), count: blockSize)
+    }
+
+    private static func pbkdf2(
+        password: Data,
+        salt: Data,
+        iterations: Int,
+        count: Int,
+        algorithm: CCPseudoRandomAlgorithm = CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256)
+    ) throws -> Data {
         var derived = Data(count: count)
         let status = password.withUnsafeBytes { passBuf in
             salt.withUnsafeBytes { saltBuf in
@@ -1076,7 +1442,7 @@ public final class YougramVaultStore: @unchecked Sendable {
                         password.count,
                         saltBase,
                         salt.count,
-                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        algorithm,
                         UInt32(iterations),
                         outBase,
                         count
@@ -1114,14 +1480,63 @@ public final class YougramVaultStore: @unchecked Sendable {
         }
     }
 
-    private static func verifyDedicatedDuressSecret(_ normalizedSecret: String, salt: Data, hash: Data) -> Bool {
+    /// Dual-Cipher Cascade AEAD wrap: inner AES-256-GCM (first 32B) wrapped in outer ChaCha20-Poly1305 (last 32B).
+    private static func cascadeSeal(_ plaintext: Data, key64: Data, aad: String) throws -> Data {
+        guard key64.count == 64 else {
+            throw YougramVaultError.corrupted
+        }
+        let innerKey = Data(key64.prefix(32))
+        let outerKey = Data(key64.suffix(32))
+        let inner = try Self.aesGcmSeal(plaintext, key: innerKey, aad: aad + ":aes")
+        let outerNonce = try ChaChaPoly.Nonce(data: Self.randomBytes(12))
+        let outerSealed = try ChaChaPoly.seal(inner, using: SymmetricKey(data: outerKey), nonce: outerNonce, authenticating: Data((aad + ":chacha").utf8))
+        return outerSealed.combined
+    }
+
+    private static func cascadeOpen(_ sealed: Data, key64: Data, aad: String) throws -> Data {
+        guard key64.count == 64, sealed.count >= 28 + 28 else {
+            throw YougramVaultError.corrupted
+        }
+        let outerKey = Data(key64.suffix(32))
+        let innerKey = Data(key64.prefix(32))
+        do {
+            let outerBox = try ChaChaPoly.SealedBox(combined: sealed)
+            let innerCombined = try ChaChaPoly.open(outerBox, using: SymmetricKey(data: outerKey), authenticating: Data((aad + ":chacha").utf8))
+            return try Self.aesGcmOpen(innerCombined, key: innerKey, aad: aad + ":aes")
+        } catch {
+            throw YougramVaultError.invalidSecret
+        }
+    }
+
+    private static func deriveDedicatedDuressHashV2(_ normalizedSecret: String, salt: Data) throws -> Data {
+        var secretData = Data(("yougram.duress.v2\0" + normalizedSecret).utf8)
+        defer { Self.zeroize(&secretData) }
+        var balloonOut = Self.balloonSHA512(password: secretData, salt: salt, blocks: 32_768, rounds: 1)
+        defer { Self.zeroize(&balloonOut) }
+        return try Self.pbkdf2(
+            password: balloonOut,
+            salt: salt,
+            iterations: Self.defaultIterations,
+            count: 32,
+            algorithm: CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA512)
+        )
+    }
+
+    private static func verifyDedicatedDuressSecret(_ normalizedSecret: String, salt: Data, hash: Data, kdfVersion: Int) -> Bool {
         guard salt.count == 32, hash.count == 32 else {
             return false
         }
-        guard let candidate = try? Self.pbkdf2(password: Data(normalizedSecret.utf8), salt: salt, iterations: Self.defaultIterations, count: 32) else {
-            return false
+        if kdfVersion >= 2 {
+            guard let candidate = try? Self.deriveDedicatedDuressHashV2(normalizedSecret, salt: salt) else {
+                return false
+            }
+            return Self.constantTimeEqual(candidate, hash)
+        } else {
+            guard let candidate = try? Self.pbkdf2(password: Data(normalizedSecret.utf8), salt: salt, iterations: Self.defaultIterations, count: 32) else {
+                return false
+            }
+            return Self.constantTimeEqual(candidate, hash)
         }
-        return Self.constantTimeEqual(candidate, hash)
     }
 
     private static func constantTimeEqual(_ lhs: Data, _ rhs: Data) -> Bool {

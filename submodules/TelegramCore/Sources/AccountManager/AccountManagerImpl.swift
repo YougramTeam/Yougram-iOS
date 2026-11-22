@@ -533,6 +533,15 @@ final class AccountManagerImpl<Types: AccountManagerTypes> {
         }
     }
 
+    fileprivate func checkpointAndClearCachesNow() {
+        assert(self.queue.isCurrent())
+        for table in self.tables {
+            table.clearMemoryCache()
+        }
+        (self.guardValueBox as? SqliteValueBox)?.checkpointAndPurgeMemory()
+        (self.valueBox as? SqliteValueBox)?.checkpointAndPurgeMemory()
+    }
+
     private static func migrateSealedFileStandalone(path: String, encrypt: Bool, key: Data, aad: String) throws {
         guard FileManager.default.fileExists(atPath: path) else {
             return
@@ -1033,6 +1042,18 @@ public final class AccountManager<Types: AccountManagerTypes> {
         progress?(0.2)
         try self.mediaBox.migrateMediaFiles(encrypt: encrypt, keys: keys) { p in
             progress?(0.2 + p * 0.8)
+        }
+    }
+
+    public func checkpointAndClearCaches(completion: @escaping () -> Void = {}) {
+        let mediaBox = self.mediaBox
+        self.impl.with { impl in
+            impl.checkpointAndClearCachesNow()
+            mediaBox.storageBox.checkpointAndClearCaches {
+                mediaBox.cacheStorageBox.checkpointAndClearCaches {
+                    completion()
+                }
+            }
         }
     }
 
