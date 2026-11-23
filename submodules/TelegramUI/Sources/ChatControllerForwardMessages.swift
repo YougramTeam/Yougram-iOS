@@ -13,8 +13,183 @@ import PremiumUI
 import ReactionSelectionNode
 import TopMessageReactions
 import ChatMessagePaymentAlertController
+import YougramSettingsUI
 
 extension ChatControllerImpl {
+    private func requiresAdvancedForward(messages: [EngineRawMessage]) -> Bool {
+        if self.presentationInterfaceState.renderedPeer?.peer?.isServerCopyProtectionEnabled == true {
+            return true
+        }
+        for message in messages {
+            if message.isServerCopyProtected() || (message.peers[message.id.peerId]?.isServerCopyProtectionEnabled ?? false) || message.isYougramDeleted {
+                return true
+            }
+        }
+        return false
+    }
+
+    func advancedForwardMessages(messageIds: [EngineMessage.Id]) {
+        let _ = (self.context.engine.data.get(EngineDataMap(
+            messageIds.map(TelegramEngine.EngineData.Item.Messages.Message.init)
+        ))
+        |> deliverOnMainQueue).startStandalone(next: { [weak self] messages in
+            let sortedMessages = messages.values.compactMap { $0?._asMessage() }.sorted { lhs, rhs in
+                return lhs.id < rhs.id
+            }
+            if !sortedMessages.isEmpty {
+                self?.advancedForwardMessages(messages: sortedMessages)
+            }
+        })
+    }
+
+    func advancedForwardMessages(messages: [EngineRawMessage]) {
+        guard !messages.isEmpty else {
+            return
+        }
+        let _ = self.presentVoiceMessageDiscardAlert(action: { [weak self] in
+            guard let self else {
+                return
+            }
+
+            var filter: ChatListNodePeersFilter = [.onlyWriteable, .excludeDisabled, .doNotSearchMessages]
+            for message in messages {
+                if message.media.contains(where: { $0 is TelegramMediaPoll }) {
+                    filter.insert(.excludeSecretChats)
+                }
+            }
+
+            let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+            let messageIds = messages.map { $0.id }
+
+            var attemptSelectionImpl: ((EnginePeer, ChatListDisabledPeerReason) -> Void)?
+            let controller = self.context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+                context: self.context,
+                updatedPresentationData: self.updatedPresentationData,
+                filter: filter,
+                hasFilters: true,
+                title: presentationData.strings.Yougram_AdvancedForward_Title,
+                attemptSelection: { peer, _, reason in
+                    attemptSelectionImpl?(peer, reason)
+                },
+                multipleSelection: true,
+                forwardedMessageIds: [],
+                selectForumThreads: true
+            ))
+
+            let context = self.context
+            attemptSelectionImpl = { [weak self, weak controller] peer, reason in
+                guard let strongSelf = self, let controller else {
+                    return
+                }
+                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                switch reason {
+                case .generic:
+                    controller.present(textAlertController(context: context, updatedPresentationData: strongSelf.updatedPresentationData, title: nil, text: presentationData.strings.Forward_ErrorDisabledForChat, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
+                case .premiumRequired:
+                    var hasAction = false
+                    let premiumConfiguration = PremiumConfiguration.with(appConfiguration: strongSelf.context.currentAppConfiguration.with { $0 })
+                    if !premiumConfiguration.isPremiumDisabled {
+                        hasAction = true
+                    }
+                    controller.present(UndoOverlayController(presentationData: presentationData, content: .premiumPaywall(title: nil, text: presentationData.strings.Chat_ToastMessagingRestrictedToPremium_Text(peer.compactDisplayTitle).string, customUndoText: hasAction ? presentationData.strings.Chat_ToastMessagingRestrictedToPremium_Action : nil, timeout: nil, linkAction: { _ in
+                    }), elevatedLayout: false, animateInAsReplacement: true, action: { [weak strongSelf, weak controller] action in
+                        guard let self = strongSelf, let controller else {
+                            return false
+                        }
+                        if case .undo = action {
+                            let premiumController = PremiumIntroScreen(context: self.context, source: .settings)
+                            controller.push(premiumController)
+                        }
+                        return false
+                    }), in: .current)
+                }
+            }
+
+            controller.multiplePeersSelected = { [weak self, weak controller] peers, peerMap, messageText, mode, _, _ in
+                guard let strongSelf = self, let strongController = controller, !peers.isEmpty else {
+                    return
+                }
+                strongController.dismiss()
+                strongSelf.updateChatPresentationInterfaceState(animated: false, interactive: true, {
+                    $0.updatedInterfaceState({ $0.withoutSelectionState() }).updatedSearch(nil)
+                })
+
+                var comment: YougramAdvancedForwardComment?
+                if messageText.string.count > 0 {
+                    let inputText = trimChatInputText(convertMarkdownToAttributes(messageText))
+                    if inputText.length != 0 {
+                        let entities = generateTextEntities(inputText.string, enabledTypes: .all, currentEntities: generateChatInputTextEntities(inputText))
+                        comment = YougramAdvancedForwardComment(text: inputText.string, entities: entities)
+                    }
+                }
+
+                let currentPresentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+                let targetSummary = YougramAdvancedForwardManager.formatTargetSummary(
+                    peers: peers,
+                    peerMap: peerMap,
+                    accountPeerId: strongSelf.context.account.peerId,
+                    strings: currentPresentationData.strings,
+                    nameDisplayOrder: currentPresentationData.nameDisplayOrder
+                )
+                let targets = peers.map { YougramAdvancedForwardTarget(peerId: $0.id, threadId: nil) }
+
+                let launch: (Bool, Int32?, Int32?) -> Void = { silent, scheduleTime, repeatPeriod in
+                    YougramAdvancedForwardManager.shared.start(
+                        context: strongSelf.context,
+                        messageIds: messageIds,
+                        targets: targets,
+                        targetSummary: targetSummary,
+                        comment: comment,
+                        silent: silent,
+                        scheduleTime: scheduleTime,
+                        repeatPeriod: repeatPeriod
+                    )
+                }
+
+                switch mode {
+                case .generic:
+                    launch(false, nil, nil)
+                case .silent:
+                    launch(true, nil, nil)
+                case .schedule:
+                    strongSelf.presentScheduleTimePicker(completion: { timeResult in
+                        launch(timeResult.silentPosting, timeResult.time, timeResult.repeatPeriod)
+                    })
+                case .whenOnline:
+                    launch(strongSelf.presentationInterfaceState.interfaceState.silentPosting, scheduleWhenOnlineTimestamp, nil)
+                }
+            }
+
+            controller.peerSelected = { [weak self, weak controller] peer, threadId in
+                controller?.dismiss()
+                guard let strongSelf = self else {
+                    return
+                }
+                strongSelf.updateChatPresentationInterfaceState(animated: false, interactive: true, {
+                    $0.updatedInterfaceState({ $0.withoutSelectionState() }).updatedSearch(nil)
+                })
+                let currentPresentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+                let targetSummary = YougramAdvancedForwardManager.formatTargetSummary(
+                    peers: [peer],
+                    peerMap: [:],
+                    accountPeerId: strongSelf.context.account.peerId,
+                    strings: currentPresentationData.strings,
+                    nameDisplayOrder: currentPresentationData.nameDisplayOrder
+                )
+                let targets = [YougramAdvancedForwardTarget(peerId: peer.id, threadId: threadId)]
+                YougramAdvancedForwardManager.shared.start(
+                    context: strongSelf.context,
+                    messageIds: messageIds,
+                    targets: targets,
+                    targetSummary: targetSummary
+                )
+            }
+
+            self.chatDisplayNode.dismissInput()
+            self.effectiveNavigationController?.pushViewController(controller)
+        })
+    }
+
     func forwardMessages(messageIds: [EngineMessage.Id], options: ChatInterfaceForwardOptionsState? = nil, resetCurrent: Bool = false) {
         let _ = (self.context.engine.data.get(EngineDataMap(
             messageIds.map(TelegramEngine.EngineData.Item.Messages.Message.init)
@@ -28,6 +203,10 @@ extension ChatControllerImpl {
     }
 
     func forwardMessages(messages: [EngineRawMessage], options: ChatInterfaceForwardOptionsState? = nil, resetCurrent: Bool) {
+        if self.requiresAdvancedForward(messages: messages) {
+            self.advancedForwardMessages(messages: messages)
+            return
+        }
         let _ = self.presentVoiceMessageDiscardAlert(action: { [weak self] in
             guard let self else {
                 return
@@ -92,8 +271,8 @@ extension ChatControllerImpl {
                     }
                     
                     controller.present(UndoOverlayController(presentationData: presentationData, content: .premiumPaywall(title: nil, text: presentationData.strings.Chat_ToastMessagingRestrictedToPremium_Text(peer.compactDisplayTitle).string, customUndoText: hasAction ? presentationData.strings.Chat_ToastMessagingRestrictedToPremium_Action : nil, timeout: nil, linkAction: { _ in
-                    }), elevatedLayout: false, animateInAsReplacement: true, action: { [weak controller] action in
-                        guard let self, let controller else {
+                    }), elevatedLayout: false, animateInAsReplacement: true, action: { [weak strongSelf, weak controller] action in
+                        guard let self = strongSelf, let controller else {
                             return false
                         }
                         if case .undo = action {

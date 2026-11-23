@@ -83,7 +83,6 @@ private func yougramAllSearchableItems(
 
         // Privacy
         YougramSearchableItem(title: strings.Yougram_Ghost_StoryWarning, category: strings.Yougram_Settings_Privacy, iconName: "exclamationmark.triangle", keywords: "story warning prompt confirm ghost", destructive: false, enabled: true, kind: .toggle(key: \.ghostStoryWarning, requiresRestart: false)),
-        YougramSearchableItem(title: strings.Yougram_Privacy_AllowCopyProtected, category: strings.Yougram_Settings_Privacy, iconName: "doc.on.doc", keywords: "copy download screenshot protected content restrict save", destructive: false, enabled: true, kind: .toggle(key: \.allowCopyProtectedContent, requiresRestart: false)),
         YougramSearchableItem(title: strings.Yougram_Privacy_HideBlockedUsers, category: strings.Yougram_Settings_Privacy, iconName: "person.crop.circle.badge.xmark", keywords: "blocked users filter hide group messages", destructive: false, enabled: true, kind: .toggle(key: \.hideBlockedUsersMessages, requiresRestart: false)),
         YougramSearchableItem(title: strings.Yougram_Privacy_HidePhone, category: strings.Yougram_Settings_Privacy, iconName: "phone.down", keywords: "phone number hide settings profile screen share", destructive: false, enabled: true, kind: .toggle(key: \.hidePhoneInSettings, requiresRestart: false)),
         YougramSearchableItem(title: strings.Yougram_Privacy_HideAccountInNotifications, category: strings.Yougram_Settings_Privacy, iconName: "bell.slash", keywords: "notifications hide account name", destructive: false, enabled: true, kind: .toggle(key: \.hideAccountNameInNotifications, requiresRestart: false)),
@@ -298,7 +297,6 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, lo
         b.info(strings.Yougram_Privacy_LocalHistoryInfo)
         b.newSection()
         b.header(strings.Yougram_Privacy_ContentSection)
-        b.toggle(strings.Yougram_Privacy_AllowCopyProtected, settings, \.allowCopyProtectedContent, icon: yougramIcon("doc.on.doc", theme: theme))
         b.toggle(strings.Yougram_Privacy_HideBlockedUsers, settings, \.hideBlockedUsersMessages, icon: yougramIcon("person.crop.circle.badge.xmark", theme: theme))
         b.info("\(strings.Yougram_Privacy_AllowCopyProtectedInfo)\n\n\(strings.Yougram_Privacy_HideBlockedUsersInfo)")
         b.newSection()

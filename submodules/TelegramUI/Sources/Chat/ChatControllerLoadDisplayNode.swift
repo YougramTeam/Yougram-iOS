@@ -4781,7 +4781,27 @@ extension ChatControllerImpl {
             }
         }, chatController: { [weak self] in
             return self
-        }, statuses: ChatPanelInterfaceInteractionStatuses(editingMessage: self.editingMessage.get(), startingBot: self.startingBot.get(), unblockingPeer: self.unblockingPeer.get(), searching: self.searching.get(), loadingMessage: self.loadingMessage.get(), inlineSearch: self.performingInlineSearch.get()))
+        }, statuses: ChatPanelInterfaceInteractionStatuses(editingMessage: self.editingMessage.get(), startingBot: self.startingBot.get(), unblockingPeer: self.unblockingPeer.get(), searching: self.searching.get(), loadingMessage: self.loadingMessage.get(), inlineSearch: self.performingInlineSearch.get()), advancedForwardSelectedMessages: { [weak self] in
+            if let strongSelf = self {
+                guard !strongSelf.presentAccountFrozenInfoIfNeeded(delay: true) else {
+                    return
+                }
+                strongSelf.commitPurposefulAction()
+                if let forwardMessageIdsSet = strongSelf.presentationInterfaceState.interfaceState.selectionState?.selectedIds {
+                    let forwardMessageIds = Array(forwardMessageIdsSet).sorted()
+                    strongSelf.advancedForwardMessages(messageIds: forwardMessageIds)
+                }
+            }
+        }, advancedForwardMessages: { [weak self] messages in
+            if let strongSelf = self, !messages.isEmpty {
+                guard !strongSelf.presentAccountFrozenInfoIfNeeded(delay: true) else {
+                    return
+                }
+                strongSelf.commitPurposefulAction()
+                let forwardMessageIds = messages.map { $0.id }.sorted()
+                strongSelf.advancedForwardMessages(messageIds: forwardMessageIds)
+            }
+        })
         
         self.interfaceInteraction = interfaceInteraction
         

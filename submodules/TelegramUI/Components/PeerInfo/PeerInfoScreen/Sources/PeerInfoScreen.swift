@@ -905,13 +905,25 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
                     })))
                 }
                 
-                if message.isCopyProtected() || isCopyProtected {
-                    
-                } else if message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.minAutoremoveOrClearTimeout == nil {
+                let serverProtected = message.isServerCopyProtected() || (message.peers[message.id.peerId]?.isServerCopyProtectionEnabled ?? false) || (strongSelf.data?.peer?.isServerCopyProtectionEnabled ?? false)
+                if !isCopyProtected && !serverProtected && !message.isYougramDeleted && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.minAutoremoveOrClearTimeout == nil {
                     items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Conversation_ContextMenuForward, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.contextMenu.primaryColor) }, action: { c, _ in
                         c?.dismiss(completion: {
                             if let strongSelf = self {
                                 strongSelf.forwardMessages(messageIds: Set([message.id]))
+                            }
+                        })
+                    })))
+                }
+                let isActionMessage = message.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent })
+                if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isActionMessage {
+                    items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Yougram_AdvancedForward_Action, icon: { theme in
+                        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 20.0, weight: .regular)
+                        return UIImage(systemName: "arrowshape.turn.up.right.circle", withConfiguration: symbolConfig)?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal) ?? generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.contextMenu.primaryColor)
+                    }, action: { c, _ in
+                        c?.dismiss(completion: {
+                            if let strongSelf = self {
+                                strongSelf.advancedForwardMessages(messageIds: Set([message.id]))
                             }
                         })
                     })))
@@ -5943,6 +5955,11 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
                         return
                     }
                     strongSelf.forwardMessages(messageIds: nil)
+                }, advancedForwardMessages: { [weak self] in
+                    guard let strongSelf = self, strongSelf.peerId.namespace != Namespaces.Peer.SecretChat else {
+                        return
+                    }
+                    strongSelf.advancedForwardMessages(messageIds: nil)
                 }, reportMessages: { [weak self] in
                     guard let strongSelf = self, let messageIds = strongSelf.state.selectedMessageIds, !messageIds.isEmpty else {
                         return

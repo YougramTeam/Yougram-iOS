@@ -251,12 +251,101 @@ public func yougramDeletedMessagesController(
     var pushImpl: ((ViewController) -> Void)?
     var presentImpl: ((ViewController) -> Void)?
     var copyableTexts: [String: String] = [:]
+    var recordsByTag: [String: YougramDeletedMessageRecord] = [:]
     var editedById: [String: YougramEditedMessageRecord] = [:]
+
+    func openAdvancedForward(for record: YougramDeletedMessageRecord) {
+        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        let strings = presentationData.strings
+        let peerSelectionController = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+            context: context,
+            filter: [.onlyWriteable, .excludeDisabled, .doNotSearchMessages],
+            hasFilters: true,
+            title: strings.Yougram_AdvancedForward_Title,
+            multipleSelection: true,
+            forwardedMessageIds: [],
+            selectForumThreads: true
+        ))
+        peerSelectionController.multiplePeersSelected = { [weak peerSelectionController] peers, peerMap, messageText, mode, _, _ in
+            peerSelectionController?.dismiss()
+            guard !peers.isEmpty else {
+                return
+            }
+            let currentPresentationData = context.sharedContext.currentPresentationData.with { $0 }
+            let targetSummary = YougramAdvancedForwardManager.formatTargetSummary(
+                peers: peers,
+                peerMap: peerMap,
+                accountPeerId: context.account.peerId,
+                strings: currentPresentationData.strings,
+                nameDisplayOrder: currentPresentationData.nameDisplayOrder
+            )
+            let trimmedComment = messageText.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            let comment = trimmedComment.isEmpty ? nil : YougramAdvancedForwardComment(text: trimmedComment, entities: [])
+            let targets = peers.map { YougramAdvancedForwardTarget(peerId: $0.id, threadId: nil) }
+            let silent = (mode == .silent)
+            let scheduleTime: Int32? = (mode == .whenOnline) ? scheduleWhenOnlineTimestamp : nil
+            YougramAdvancedForwardManager.shared.startDeletedRecord(
+                context: context,
+                record: record,
+                targets: targets,
+                targetSummary: targetSummary,
+                comment: comment,
+                silent: silent,
+                scheduleTime: scheduleTime,
+                repeatPeriod: nil
+            )
+        }
+        peerSelectionController.peerSelected = { [weak peerSelectionController] peer, threadId in
+            peerSelectionController?.dismiss()
+            let currentPresentationData = context.sharedContext.currentPresentationData.with { $0 }
+            let targetSummary = YougramAdvancedForwardManager.formatTargetSummary(
+                peers: [peer],
+                peerMap: [:],
+                accountPeerId: context.account.peerId,
+                strings: currentPresentationData.strings,
+                nameDisplayOrder: currentPresentationData.nameDisplayOrder
+            )
+            YougramAdvancedForwardManager.shared.startDeletedRecord(
+                context: context,
+                record: record,
+                targets: [YougramAdvancedForwardTarget(peerId: peer.id, threadId: threadId)],
+                targetSummary: targetSummary
+            )
+        }
+        pushImpl?(peerSelectionController)
+    }
 
     let arguments = HistoryArguments(
         toggle: { _, _ in },
         performAction: { tag in
-            if tag.hasPrefix("copy:"), let text = copyableTexts[tag] {
+            if tag.hasPrefix("copy:"), let record = recordsByTag[tag] {
+                let copyText = copyableTexts[tag] ?? ""
+                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                let strings = presentationData.strings
+                let sheet = ActionSheetController(presentationData: presentationData)
+                var items: [ActionSheetItem] = [
+                    ActionSheetTextItem(title: strings.Yougram_History_TapActionTitle),
+                    ActionSheetButtonItem(title: strings.Yougram_AdvancedForward_Action, color: .accent, action: { [weak sheet] in
+                        sheet?.dismissAnimated()
+                        openAdvancedForward(for: record)
+                    })
+                ]
+                if !copyText.isEmpty {
+                    items.append(ActionSheetButtonItem(title: strings.Yougram_History_CopyText, color: .accent, action: { [weak sheet] in
+                        sheet?.dismissAnimated()
+                        copyTextWithToast(context: context, text: copyText, present: presentImpl)
+                    }))
+                }
+                sheet.setItemGroups([
+                    ActionSheetItemGroup(items: items),
+                    ActionSheetItemGroup(items: [
+                        ActionSheetButtonItem(title: strings.Common_Cancel, color: .accent, font: .bold, action: { [weak sheet] in
+                            sheet?.dismissAnimated()
+                        })
+                    ])
+                ])
+                presentImpl?(sheet)
+            } else if tag.hasPrefix("copy:"), let text = copyableTexts[tag] {
                 copyTextWithToast(context: context, text: text, present: presentImpl)
             } else if tag.hasPrefix("edited:"), let record = editedById[tag] {
                 pushImpl?(yougramEditHistoryController(context: context, messageId: record.messageId, currentText: nil))
@@ -288,6 +377,7 @@ public func yougramDeletedMessagesController(
         let strings = presentationData.strings
 
         var newCopyable: [String: String] = [:]
+        var newRecords: [String: YougramDeletedMessageRecord] = [:]
         var newEdited: [String: YougramEditedMessageRecord] = [:]
         var entries: [HistoryEntry] = []
         var nextId: Int32 = 0
@@ -310,6 +400,7 @@ public func yougramDeletedMessagesController(
                 let body = bodyParts.joined(separator: "\n")
                 let tag = "copy:\(index)"
                 newCopyable[tag] = record.text.isEmpty ? body : record.text
+                newRecords[tag] = record
                 entries.append(.disclosure(
                     id: id(),
                     section: section,
@@ -351,6 +442,7 @@ public func yougramDeletedMessagesController(
         }
 
         copyableTexts = newCopyable
+        recordsByTag = newRecords
         editedById = newEdited
 
         let titleText = peerTitle.isEmpty ? strings.Yougram_History_ViewDeleted : peerTitle

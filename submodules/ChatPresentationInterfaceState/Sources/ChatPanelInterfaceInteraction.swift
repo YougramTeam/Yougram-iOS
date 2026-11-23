@@ -82,6 +82,8 @@ public final class ChatPanelInterfaceInteraction {
     public let forwardSelectedMessages: () -> Void
     public let forwardCurrentForwardMessages: () -> Void
     public let forwardMessages: ([EngineRawMessage]) -> Void
+    public let advancedForwardSelectedMessages: () -> Void
+    public let advancedForwardMessages: ([EngineRawMessage]) -> Void
     public let updateForwardOptionsState: ((ChatInterfaceForwardOptionsState) -> ChatInterfaceForwardOptionsState) -> Void
     public let presentForwardOptions: (UIView) -> Void
     public let presentReplyOptions: (UIView) -> Void
@@ -335,7 +337,9 @@ public final class ChatPanelInterfaceInteraction {
         updateDisplayHistoryFilterAsList: @escaping (Bool) -> Void,
         requestLayout: @escaping (ContainedViewLayoutTransition) -> Void,
         chatController: @escaping () -> ViewController?,
-        statuses: ChatPanelInterfaceInteractionStatuses?
+        statuses: ChatPanelInterfaceInteractionStatuses?,
+        advancedForwardSelectedMessages: @escaping () -> Void = {},
+        advancedForwardMessages: @escaping ([EngineRawMessage]) -> Void = { _ in }
     ) {
         self.setupReplyMessage = setupReplyMessage
         self.setupEditMessage = setupEditMessage
@@ -470,6 +474,8 @@ public final class ChatPanelInterfaceInteraction {
 
         self.chatController = chatController
         self.statuses = statuses
+        self.advancedForwardSelectedMessages = advancedForwardSelectedMessages
+        self.advancedForwardMessages = advancedForwardMessages
     }
     
     public convenience init(

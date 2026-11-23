@@ -7,6 +7,7 @@ import TelegramCore
 import TextFormat
 import UndoUI
 import ChatInterfaceState
+import YougramSettingsUI
 
 extension PeerInfoScreenNode {
     func deleteMessages(messageIds: Set<EngineMessage.Id>?) {
@@ -70,8 +71,112 @@ extension PeerInfoScreenNode {
         }
     }
     
+    func advancedForwardMessages(messageIds: Set<EngineMessage.Id>?) {
+        guard let messageIds = messageIds ?? self.state.selectedMessageIds, !messageIds.isEmpty else {
+            return
+        }
+        let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+        let sortedIds = Array(messageIds).sorted()
+        let peerSelectionController = self.context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+            context: self.context,
+            updatedPresentationData: self.controller?.updatedPresentationData,
+            filter: [.onlyWriteable, .excludeDisabled, .doNotSearchMessages],
+            hasFilters: true,
+            title: presentationData.strings.Yougram_AdvancedForward_Title,
+            multipleSelection: true,
+            forwardedMessageIds: [],
+            selectForumThreads: true
+        ))
+        peerSelectionController.multiplePeersSelected = { [weak self, weak peerSelectionController] peers, peerMap, messageText, mode, _, _ in
+            guard let strongSelf = self, let strongController = peerSelectionController, !peers.isEmpty else {
+                return
+            }
+            strongController.dismiss()
+            strongSelf.performNavigationButtonAction?(.selectionDone, nil, nil)
+
+            var comment: YougramAdvancedForwardComment?
+            if messageText.string.count > 0 {
+                let inputText = trimChatInputText(convertMarkdownToAttributes(messageText))
+                if inputText.length != 0 {
+                    let entities = generateTextEntities(inputText.string, enabledTypes: .all, currentEntities: generateChatInputTextEntities(inputText))
+                    comment = YougramAdvancedForwardComment(text: inputText.string, entities: entities)
+                }
+            }
+
+            let currentPresentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+            let targetSummary = YougramAdvancedForwardManager.formatTargetSummary(
+                peers: peers,
+                peerMap: peerMap,
+                accountPeerId: strongSelf.context.account.peerId,
+                strings: currentPresentationData.strings,
+                nameDisplayOrder: currentPresentationData.nameDisplayOrder
+            )
+            let targets = peers.map { YougramAdvancedForwardTarget(peerId: $0.id, threadId: nil) }
+            let silent = (mode == .silent)
+            let scheduleTime: Int32? = (mode == .whenOnline) ? scheduleWhenOnlineTimestamp : nil
+
+            YougramAdvancedForwardManager.shared.start(
+                context: strongSelf.context,
+                messageIds: sortedIds,
+                targets: targets,
+                targetSummary: targetSummary,
+                comment: comment,
+                silent: silent,
+                scheduleTime: scheduleTime,
+                repeatPeriod: nil
+            )
+        }
+        peerSelectionController.peerSelected = { [weak self, weak peerSelectionController] peer, threadId in
+            peerSelectionController?.dismiss()
+            guard let strongSelf = self else {
+                return
+            }
+            strongSelf.performNavigationButtonAction?(.selectionDone, nil, nil)
+            let currentPresentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+            let targetSummary = YougramAdvancedForwardManager.formatTargetSummary(
+                peers: [peer],
+                peerMap: [:],
+                accountPeerId: strongSelf.context.account.peerId,
+                strings: currentPresentationData.strings,
+                nameDisplayOrder: currentPresentationData.nameDisplayOrder
+            )
+            YougramAdvancedForwardManager.shared.start(
+                context: strongSelf.context,
+                messageIds: sortedIds,
+                targets: [YougramAdvancedForwardTarget(peerId: peer.id, threadId: threadId)],
+                targetSummary: targetSummary
+            )
+        }
+        self.controller?.push(peerSelectionController)
+    }
+
     func forwardMessages(messageIds: Set<EngineMessage.Id>?) {
         if let messageIds = messageIds ?? self.state.selectedMessageIds, !messageIds.isEmpty {
+            if self.data?.peer?.isServerCopyProtectionEnabled == true {
+                self.advancedForwardMessages(messageIds: messageIds)
+                return
+            }
+            let _ = (self.context.engine.data.get(EngineDataMap(
+                messageIds.map(TelegramEngine.EngineData.Item.Messages.Message.init)
+            ))
+            |> deliverOnMainQueue).startStandalone(next: { [weak self] messageMap in
+                guard let strongSelf = self else {
+                    return
+                }
+                for case let someMessage? in messageMap.values {
+                    let raw = someMessage._asMessage()
+                    if raw.isServerCopyProtected() || (raw.peers[raw.id.peerId]?.isServerCopyProtectionEnabled ?? false) || raw.isYougramDeleted {
+                        strongSelf.advancedForwardMessages(messageIds: messageIds)
+                        return
+                    }
+                }
+                strongSelf.performStandardForwardMessages(messageIds: messageIds)
+            })
+        }
+    }
+
+    private func performStandardForwardMessages(messageIds: Set<EngineMessage.Id>) {
+        if !messageIds.isEmpty {
             let peerSelectionController = self.context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(context: self.context, updatedPresentationData: self.controller?.updatedPresentationData, filter: [.onlyWriteable, .excludeDisabled], hasFilters: true, multipleSelection: true, selectForumThreads: true))
             peerSelectionController.multiplePeersSelected = { [weak self, weak peerSelectionController] peers, peerMap, messageText, mode, forwardOptions, _ in
                 guard let strongSelf = self, let strongController = peerSelectionController else {

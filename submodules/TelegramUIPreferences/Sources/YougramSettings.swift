@@ -105,7 +105,7 @@ public struct YougramSettings: Codable, Equatable {
             hideAds: true,
             saveDeletedMessages: false,
             saveEditHistory: false,
-            allowCopyProtectedContent: false,
+            allowCopyProtectedContent: true,
             hideBlockedUsersMessages: false,
             ghostModeEnabled: false,
             ghostHideReadReceipts: true,
@@ -218,7 +218,8 @@ public struct YougramSettings: Codable, Equatable {
         self.hideAds = hideAds
         self.saveDeletedMessages = saveDeletedMessages
         self.saveEditHistory = saveEditHistory
-        self.allowCopyProtectedContent = allowCopyProtectedContent
+        let _ = allowCopyProtectedContent
+        self.allowCopyProtectedContent = true
         self.hideBlockedUsersMessages = hideBlockedUsersMessages
         self.ghostModeEnabled = ghostModeEnabled
         self.ghostHideReadReceipts = ghostHideReadReceipts
@@ -298,7 +299,7 @@ public struct YougramSettings: Codable, Equatable {
         self.hideAds = bool(.hideAds, d.hideAds)
         self.saveDeletedMessages = bool(.saveDeletedMessages, d.saveDeletedMessages)
         self.saveEditHistory = bool(.saveEditHistory, d.saveEditHistory)
-        self.allowCopyProtectedContent = bool(.allowCopyProtectedContent, d.allowCopyProtectedContent)
+        self.allowCopyProtectedContent = true
         self.hideBlockedUsersMessages = bool(.hideBlockedUsersMessages, d.hideBlockedUsersMessages)
         self.ghostModeEnabled = bool(.ghostModeEnabled, d.ghostModeEnabled)
         self.ghostHideReadReceipts = bool(.ghostHideReadReceipts, d.ghostHideReadReceipts)
@@ -467,7 +468,7 @@ public struct YougramSettings: Codable, Equatable {
         YougramCoreOptions.hideAds = value.hideAds
         YougramCoreOptions.saveDeletedMessages = value.saveDeletedMessages
         YougramCoreOptions.saveEditHistory = value.saveEditHistory
-        YougramCoreOptions.allowCopyProtectedContent = value.allowCopyProtectedContent
+        YougramCoreOptions.allowCopyProtectedContent = true
         YougramCoreOptions.hideBlockedUsersMessages = value.hideBlockedUsersMessages
     }
     private static let updatesPipe = ValuePipe<YougramSettings>()
@@ -491,6 +492,8 @@ public struct YougramSettings: Codable, Equatable {
 
     /// Replace the in-process copy (called with every new value of the shared-data entry).
     public static func setCurrent(_ value: YougramSettings) {
+        var value = value
+        value.allowCopyProtectedContent = true
         lock.lock()
         let changed = cached != value
         cached = value

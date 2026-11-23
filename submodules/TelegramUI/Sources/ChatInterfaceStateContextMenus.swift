@@ -463,11 +463,21 @@ private func ephemeralReplacementContextMenuItems(chatPresentationInterfaceState
         if let replacementMessage {
             let isForwardingDisabled = (replacementMessage.attributes.first(where: { $0 is EphemeralMessageAttribute }) as? EphemeralMessageAttribute)?.isForwardingDisabled ?? false
             let serverProtected = replacementMessage.isServerCopyProtected() || (chatPresentationInterfaceState.renderedPeer?.peer?.isServerCopyProtectionEnabled ?? false)
-            if !isForwardingDisabled && !isCopyProtected && !serverProtected && !replacementMessage.containsSecretMedia && !replacementMessage.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent }) {
+            let canAdvancedForwardReplacement = replacementMessage.id.peerId.namespace != Namespaces.Peer.SecretChat && !replacementMessage.containsSecretMedia && !replacementMessage.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent })
+            if !isForwardingDisabled && !isCopyProtected && !serverProtected && canAdvancedForwardReplacement {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuForward, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
                 }, action: { _, f in
                     interfaceInteraction.forwardMessages([replacementMessage])
+                    f(.dismissWithoutContent)
+                })))
+            }
+            if canAdvancedForwardReplacement {
+                actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Yougram_AdvancedForward_Action, icon: { theme in
+                    let symbolConfig = UIImage.SymbolConfiguration(pointSize: 20.0, weight: .regular)
+                    return UIImage(systemName: "arrowshape.turn.up.right.circle", withConfiguration: symbolConfig)?.withTintColor(theme.actionSheet.primaryTextColor, renderingMode: .alwaysOriginal) ?? generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
+                }, action: { _, f in
+                    interfaceInteraction.advancedForwardMessages([replacementMessage])
                     f(.dismissWithoutContent)
                 })))
             }
@@ -1960,7 +1970,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
 
         if data.messageActions.options.contains(.forward), !YougramContextMenuAction.forward.isHidden {
             let serverProtected = message.isServerCopyProtected() || (message.peers[message.id.peerId]?.isServerCopyProtectionEnabled ?? false)
-            if !isCopyProtected && !serverProtected {
+            if !isCopyProtected && !serverProtected && !message.isYougramDeleted {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuForward, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
                 }, action: { _, f in
@@ -1968,6 +1978,17 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     f(.dismissWithoutContent)
                 })))
             }
+        }
+
+        let isActionMessage = message.media.contains(where: { $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent })
+        if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !(message.flags.isSending || message.flags.contains(.Failed)) && !isActionMessage && !message.containsSecretMedia {
+            actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Yougram_AdvancedForward_Action, icon: { theme in
+                let symbolConfig = UIImage.SymbolConfiguration(pointSize: 20.0, weight: .regular)
+                return UIImage(systemName: "arrowshape.turn.up.right.circle", withConfiguration: symbolConfig)?.withTintColor(theme.actionSheet.primaryTextColor, renderingMode: .alwaysOriginal) ?? generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
+            }, action: { _, f in
+                interfaceInteraction.advancedForwardMessages(selectAll || isImage ? messages : [message])
+                f(.dismissWithoutContent)
+            })))
         }
 
         if let editHistoryRecord, !editHistoryRecord.versions.isEmpty {
@@ -2815,7 +2836,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                             }
                         }
                         if !message.containsSecretMedia && !isAction && !isShareProtected {
-                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isCopyProtected() && !message.isServerCopyProtected() && !channel.isServerCopyProtectionEnabled {
+                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isCopyProtected() && !message.isServerCopyProtected() && !channel.isServerCopyProtectionEnabled && !message.isYougramDeleted {
                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                     optionsMap[id]!.insert(.forward)
                                 }
@@ -2831,7 +2852,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                         }
                     } else if let group = peer as? TelegramGroup {
                         if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia {
-                            if !isAction && !message.isCopyProtected() && !message.isServerCopyProtected() && !group.isServerCopyProtectionEnabled && !isShareProtected {
+                            if !isAction && !message.isCopyProtected() && !message.isServerCopyProtected() && !group.isServerCopyProtectionEnabled && !isShareProtected && !message.isYougramDeleted {
                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                     optionsMap[id]!.insert(.forward)
                                 }
@@ -2850,7 +2871,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                             optionsMap[id]!.insert(.report)
                         }
                     } else if let user = peer as? TelegramUser {
-                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isCopyProtected() && !message.isServerCopyProtected() && !isShareProtected {
+                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isCopyProtected() && !message.isServerCopyProtected() && !isShareProtected && !message.isYougramDeleted {
                             if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                 optionsMap[id]!.insert(.forward)
                             }

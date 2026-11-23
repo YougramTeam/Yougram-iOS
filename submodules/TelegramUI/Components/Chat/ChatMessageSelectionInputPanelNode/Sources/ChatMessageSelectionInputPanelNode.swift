@@ -265,6 +265,9 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         self.deleteButton.button.addTarget(self, action: #selector(self.deleteButtonPressed), for: .touchUpInside)
         self.reportButton.button.addTarget(self, action: #selector(self.reportButtonPressed), for: .touchUpInside)
         self.forwardButton.button.addTarget(self, action: #selector(self.forwardButtonPressed), for: .touchUpInside)
+        let forwardLongPress = UILongPressGestureRecognizer(target: self, action: #selector(self.forwardButtonLongPressed(_:)))
+        forwardLongPress.minimumPressDuration = 0.4
+        self.forwardButton.button.addGestureRecognizer(forwardLongPress)
         self.shareButton.button.addTarget(self, action: #selector(self.shareButtonPressed), for: .touchUpInside)
         self.tagButton.button.addTarget(self, action: #selector(self.tagButtonPressed), for: .touchUpInside)
         self.tagEditButton.button.addTarget(self, action: #selector(self.tagButtonPressed), for: .touchUpInside)
@@ -314,11 +317,28 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         if let _ = self.presentationInterfaceState?.renderedPeer?.peer as? TelegramSecretChat {
             return
         }
-        if let actions = self.actions, actions.isCopyProtected {
-            self.interfaceInteraction?.displayCopyProtectionTip(self.forwardButton, false)
-        } else if !self.forwardButton.isImplicitlyDisabled {
-            self.interfaceInteraction?.forwardSelectedMessages()
+        guard !self.selectedMessages.isEmpty else {
+            return
         }
+        if let actions = self.actions, actions.options.contains(.forward) {
+            self.interfaceInteraction?.forwardSelectedMessages()
+        } else {
+            self.interfaceInteraction?.advancedForwardSelectedMessages()
+        }
+    }
+
+    @objc private func forwardButtonLongPressed(_ recognizer: UILongPressGestureRecognizer) {
+        guard case .began = recognizer.state else {
+            return
+        }
+        if let _ = self.presentationInterfaceState?.renderedPeer?.peer as? TelegramSecretChat {
+            return
+        }
+        guard !self.selectedMessages.isEmpty else {
+            return
+        }
+        HapticFeedback().impact(.medium)
+        self.interfaceInteraction?.advancedForwardSelectedMessages()
     }
     
     @objc private func shareButtonPressed() {
@@ -470,7 +490,8 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         if let actions = self.actions {
             self.deleteButton.isEnabled = false
             self.reportButton.isEnabled = false
-            self.forwardButton.isImplicitlyDisabled = !actions.options.contains(.forward)
+            let isSecretChat = interfaceState.renderedPeer?.peer is TelegramSecretChat
+            self.forwardButton.isImplicitlyDisabled = isSecretChat || self.selectedMessages.isEmpty
             
             if self.peerMedia {
                 self.deleteButton.isEnabled = !actions.options.intersection([.deleteLocally, .deleteGlobally]).isEmpty

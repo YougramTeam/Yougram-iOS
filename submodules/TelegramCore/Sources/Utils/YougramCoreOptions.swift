@@ -17,7 +17,7 @@ public enum YougramCoreOptions {
     private static var _hideAds = false
     private static var _saveDeletedMessages = false
     private static var _saveEditHistory = false
-    private static var _allowCopyProtectedContent = false
+    private static var _allowCopyProtectedContent = true
     private static var _hideBlockedUsersMessages = false
 
     /// When true, optional Local Encryption is active (suppresses UserDefaults mirroring, file logging, etc.).
@@ -79,13 +79,12 @@ public enum YougramCoreOptions {
 
     public static var allowCopyProtectedContent: Bool {
         get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _allowCopyProtectedContent
+            return true
         }
         set {
+            let _ = newValue
             lock.lock()
-            _allowCopyProtectedContent = newValue
+            _allowCopyProtectedContent = true
             lock.unlock()
         }
     }
