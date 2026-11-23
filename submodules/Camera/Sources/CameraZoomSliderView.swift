@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import QuartzCore
 
 public final class CameraZoomSliderView: UIView {
     public var onScaleChanged: ((Float) -> Void)?
@@ -7,6 +8,7 @@ public final class CameraZoomSliderView: UIView {
     private let backgroundEffectView: UIVisualEffectView
     private let tintOverlayView: UIView
     private let resetButton: UIButton
+    private let valueLabel: UILabel
     private let slider: UISlider
     private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
 
@@ -15,13 +17,16 @@ public final class CameraZoomSliderView: UIView {
     private var currentScale: Float = 1.0
     private var defaultScale: Float = 1.0
     private var lastDetentStep: Float?
+    private var displayedText: String = ""
+    private var lastDisplayedScale: Float = 1.0
 
     public static let preferredHeight: CGFloat = 36.0
 
     public override init(frame: CGRect) {
         self.backgroundEffectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         self.tintOverlayView = UIView()
-        self.resetButton = UIButton(type: .system)
+        self.resetButton = UIButton(type: .custom)
+        self.valueLabel = UILabel()
         self.slider = UISlider()
 
         super.init(frame: frame)
@@ -37,11 +42,15 @@ public final class CameraZoomSliderView: UIView {
         self.tintOverlayView.isUserInteractionEnabled = false
         self.addSubview(self.tintOverlayView)
 
-        self.resetButton.titleLabel?.font = UIFont.monospacedDigitSystemFont(ofSize: 12.0, weight: .semibold)
-        self.resetButton.titleLabel?.textAlignment = .center
-        self.resetButton.setTitleColor(.white, for: .normal)
+        self.resetButton.clipsToBounds = false
         self.resetButton.addTarget(self, action: #selector(self.resetPressed), for: .touchUpInside)
         self.addSubview(self.resetButton)
+
+        self.valueLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 12.0, weight: .semibold)
+        self.valueLabel.textAlignment = .center
+        self.valueLabel.textColor = .white
+        self.valueLabel.isUserInteractionEnabled = false
+        self.resetButton.addSubview(self.valueLabel)
 
         self.slider.minimumValue = 0.0
         self.slider.maximumValue = 1.0
@@ -53,7 +62,7 @@ public final class CameraZoomSliderView: UIView {
         self.slider.addTarget(self, action: #selector(self.sliderTouchDown), for: .touchDown)
         self.addSubview(self.slider)
 
-        self.updateLabel()
+        self.updateLabel(animated: false)
     }
 
     required init?(coder: NSCoder) {
@@ -75,7 +84,7 @@ public final class CameraZoomSliderView: UIView {
                 self.slider.value = progress
             }
         }
-        self.updateLabel()
+        self.updateLabel(animated: self.window != nil, emphasize: self.nearestDetent(for: clampedCurrent) != nil)
     }
 
     public override func layoutSubviews() {
@@ -91,6 +100,7 @@ public final class CameraZoomSliderView: UIView {
         let leftInset: CGFloat = 6.0
         let rightInset: CGFloat = 12.0
         self.resetButton.frame = CGRect(x: leftInset, y: 0.0, width: buttonWidth, height: bounds.height)
+        self.valueLabel.frame = self.resetButton.bounds
         let sliderX = leftInset + buttonWidth + 2.0
         let sliderWidth = max(0.0, bounds.width - sliderX - rightInset)
         self.slider.frame = CGRect(x: sliderX, y: 0.0, width: sliderWidth, height: bounds.height)
@@ -104,9 +114,9 @@ public final class CameraZoomSliderView: UIView {
     @objc private func sliderChanged() {
         let newScale = self.scaleValue(for: self.slider.value)
         self.currentScale = newScale
-        self.updateLabel()
 
         let detent = self.nearestDetent(for: newScale)
+        self.updateLabel(animated: true, emphasize: detent != nil)
         if detent != self.lastDetentStep {
             if detent != nil {
                 self.impactFeedback.impactOccurred()
@@ -122,7 +132,7 @@ public final class CameraZoomSliderView: UIView {
         let targetScale = self.defaultScale
         self.currentScale = targetScale
         self.slider.setValue(self.normalizedValue(for: targetScale), animated: true)
-        self.updateLabel()
+        self.updateLabel(animated: true, emphasize: true)
         self.impactFeedback.impactOccurred()
         self.onScaleChanged?(targetScale)
     }
@@ -153,7 +163,7 @@ public final class CameraZoomSliderView: UIView {
         return nil
     }
 
-    private func updateLabel() {
+    private func updateLabel(animated: Bool, emphasize: Bool = false) {
         let text: String
         if abs(self.currentScale - roundf(self.currentScale)) < 0.05 && self.currentScale >= 1.0 {
             text = "\(Int(roundf(self.currentScale)))×"
@@ -167,8 +177,40 @@ public final class CameraZoomSliderView: UIView {
         }
         let isDefault = abs(self.currentScale - self.defaultScale) <= 0.05
         let color = isDefault ? UIColor.white : UIColor(red: 1.0, green: 0.84, blue: 0.04, alpha: 1.0)
-        self.resetButton.setTitle(text, for: .normal)
-        self.resetButton.setTitleColor(color, for: .normal)
+        self.valueLabel.textColor = color
+
+        guard text != self.displayedText else {
+            return
+        }
+        let direction: CGFloat = self.currentScale >= self.lastDisplayedScale ? 1.0 : -1.0
+        let hadPrevious = !self.displayedText.isEmpty
+        self.displayedText = text
+        self.lastDisplayedScale = self.currentScale
+        self.valueLabel.text = text
+
+        if animated && hadPrevious && self.window != nil {
+            self.animateValueBounce(direction: direction, emphasize: emphasize)
+        }
+    }
+
+    private func animateValueBounce(direction: CGFloat, emphasize: Bool) {
+        let peakScale: CGFloat = emphasize ? 1.24 : 1.14
+        let offsetY: CGFloat = (emphasize ? 4.0 : 2.8) * direction
+        let fromTransform = CATransform3DConcat(
+            CATransform3DMakeScale(peakScale, peakScale, 1.0),
+            CATransform3DMakeTranslation(0.0, offsetY, 0.0)
+        )
+        let spring = CASpringAnimation(keyPath: "transform")
+        spring.fromValue = NSValue(caTransform3D: fromTransform)
+        spring.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        spring.mass = 0.75
+        spring.stiffness = 420.0
+        spring.damping = 15.0
+        spring.initialVelocity = 0.0
+        spring.duration = spring.settlingDuration
+        spring.isRemovedOnCompletion = true
+        self.valueLabel.layer.removeAnimation(forKey: "zoomNumberBounce")
+        self.valueLabel.layer.add(spring, forKey: "zoomNumberBounce")
     }
 
     private static func makeThumbImage() -> UIImage {
