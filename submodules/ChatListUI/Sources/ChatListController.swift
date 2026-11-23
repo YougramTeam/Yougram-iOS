@@ -123,7 +123,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         return self.chatListDisplayNode.navigationBarView.view as? ChatListNavigationBar.View
     }
 
-    private var chatListDisplayNode: ChatListControllerNode {
+    fileprivate var chatListDisplayNode: ChatListControllerNode {
         return super.displayNode as! ChatListControllerNode
     }
     
@@ -5527,7 +5527,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         let archivablePeerIds = peerIds.filter { $0 != servicePeerId && $0 != accountPeerId }
                         self.donePressed()
                         if !archivablePeerIds.isEmpty {
-                            self.archiveChats(peerIds: archivablePeerIds)
+                            self.archiveChats(peerIds: Array(archivablePeerIds))
                         }
                     } else {
                         if !peerIds.isEmpty {

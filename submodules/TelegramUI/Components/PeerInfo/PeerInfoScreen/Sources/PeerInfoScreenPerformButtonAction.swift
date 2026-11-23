@@ -888,7 +888,7 @@ extension PeerInfoScreenNode {
                         })))
                     }
                     items.append(strongSelf.exportChatContextMenuItem(
-                        peerId: chatPeer?.id ?? strongSelf.peerId,
+                        peerId: chatPeer.id,
                         title: EnginePeer(user).displayTitle(strings: strongSelf.presentationData.strings, displayOrder: strongSelf.presentationData.nameDisplayOrder)
                     ))
                     
