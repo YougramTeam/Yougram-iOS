@@ -5,6 +5,7 @@ import Display
 import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
+import TelegramUIPreferences
 import AccountContext
 import UndoUI
 
@@ -126,7 +127,7 @@ private final class YougramAdvancedForwardFloatingButton: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        UIView.animate(withDuration: 0.22, delay: 0.0, usingSpringWithDamping: 0.7, initialVelocity: 0.5, options: [.allowUserInteraction], animations: {
+        UIView.animate(withDuration: 0.22, delay: 0.0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5, options: [.allowUserInteraction], animations: {
             self.transform = .identity
         }, completion: nil)
     }
@@ -187,7 +188,7 @@ private final class YougramAdvancedForwardFloatingButton: UIView {
 
         self.alpha = 0.0
         self.transform = CGAffineTransform(scaleX: 0.45, y: 0.45)
-        UIView.animate(withDuration: 0.34, delay: 0.0, usingSpringWithDamping: 0.72, initialVelocity: 0.6, options: [.allowUserInteraction], animations: {
+        UIView.animate(withDuration: 0.34, delay: 0.0, usingSpringWithDamping: 0.72, initialSpringVelocity: 0.6, options: [.allowUserInteraction], animations: {
             self.alpha = 1.0
             self.transform = .identity
         }, completion: nil)
@@ -216,7 +217,7 @@ private final class YougramAdvancedForwardFloatingButton: UIView {
         self.lastCenterRatio = CGPoint(x: finalCenter.x / bounds.width, y: finalCenter.y / bounds.height)
 
         if animated {
-            UIView.animate(withDuration: 0.36, delay: 0.0, usingSpringWithDamping: 0.78, initialVelocity: 0.4, options: [.allowUserInteraction], animations: {
+            UIView.animate(withDuration: 0.36, delay: 0.0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.4, options: [.allowUserInteraction], animations: {
                 self.center = finalCenter
             }, completion: nil)
         } else {
@@ -411,7 +412,7 @@ private final class YougramAdvancedForwardProgressNode: ASDisplayNode {
 
     func animateIn() {
         self.cardShadowView.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
-        UIView.animate(withDuration: 0.28, delay: 0.0, usingSpringWithDamping: 0.84, initialVelocity: 0.5, options: [.allowUserInteraction], animations: {
+        UIView.animate(withDuration: 0.28, delay: 0.0, usingSpringWithDamping: 0.84, initialSpringVelocity: 0.5, options: [.allowUserInteraction], animations: {
             self.dimControl.alpha = 1.0
             self.cardShadowView.alpha = 1.0
             self.cardShadowView.transform = .identity
