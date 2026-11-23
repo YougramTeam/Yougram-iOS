@@ -43,6 +43,8 @@ public enum Camera {
         public let reportAudioLevel: Bool
         public let isRoundVideo: Bool
         public let captureMode: CameraCaptureMode?
+        public let preferUltraWide: Bool
+        public let optimizePerformance: Bool
 
         public init(
             preset: Preset,
@@ -55,7 +57,9 @@ public enum Camera {
             preferLowerFramerate: Bool = false,
             reportAudioLevel: Bool = false,
             isRoundVideo: Bool = false,
-            captureMode: CameraCaptureMode? = nil
+            captureMode: CameraCaptureMode? = nil,
+            preferUltraWide: Bool = false,
+            optimizePerformance: Bool = false
         ) {
             self.preset = preset
             self.position = position
@@ -68,7 +72,20 @@ public enum Camera {
             self.reportAudioLevel = reportAudioLevel
             self.isRoundVideo = isRoundVideo
             self.captureMode = captureMode
+            self.preferUltraWide = preferUltraWide
+            self.optimizePerformance = optimizePerformance
         }
+    }
+
+    public static func backCameraSupportsUltraWide() -> Bool {
+        if #available(iOS 13.0, *) {
+            return !AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInUltraWideCamera],
+                mediaType: .video,
+                position: .back
+            ).devices.isEmpty
+        }
+        return false
     }
 
     public enum ModeChange: Equatable {

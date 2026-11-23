@@ -6,7 +6,11 @@ import Camera
 
 func legacyIsDualCameraSupported(forRoundVideo: Bool) -> Bool {
     if #available(iOS 13.0, *), AVCaptureMultiCamSession.isMultiCamSupported && !DeviceModel.current.isIpad {
-        if forRoundVideo && (ProcessInfo.processInfo.isLowPowerModeEnabled || DeviceModel.current == .iPhoneXR) {
+        if forRoundVideo && (
+            ProcessInfo.processInfo.isLowPowerModeEnabled ||
+            ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue ||
+            DeviceModel.current == .iPhoneXR
+        ) {
             return false
         }
         return true

@@ -136,6 +136,9 @@ private func yougramAllSearchableItems(
         YougramSearchableItem(title: strings.Yougram_Chats_AirPlay, category: strings.Yougram_Settings_Chats, iconName: "airplayvideo", keywords: "airplay video player menu", destructive: false, enabled: true, kind: .toggle(key: \.airPlayButton, requiresRestart: false)),
         YougramSearchableItem(title: strings.Yougram_Chats_DisablePip, category: strings.Yougram_Settings_Chats, iconName: "rectangle.on.rectangle", keywords: "picture in picture pip swipe disable", destructive: false, enabled: true, kind: .toggle(key: \.disablePipOnSwipe, requiresRestart: false)),
         YougramSearchableItem(title: strings.Yougram_Chats_SmallVideoControls, category: strings.Yougram_Settings_Chats, iconName: "slider.horizontal.3", keywords: "small compact video controls player", destructive: false, enabled: true, kind: .toggle(key: \.disableLargeVideoControls, requiresRestart: false)),
+        YougramSearchableItem(title: strings.Yougram_Chats_CameraOptimization, category: strings.Yougram_Settings_Chats, iconName: "speedometer", keywords: "camera optimization circle video lag crash performance", destructive: false, enabled: true, kind: .toggle(key: \.cameraOptimization, requiresRestart: false)),
+        YougramSearchableItem(title: strings.Yougram_Chats_CameraStartUltraWide, category: strings.Yougram_Settings_Chats, iconName: "camera.aperture", keywords: "camera zoom 0.5 ultra wide back default", destructive: false, enabled: true, kind: .toggle(key: \.cameraStartUltraWide, requiresRestart: false)),
+        YougramSearchableItem(title: strings.Yougram_Chats_CameraZoomSlider, category: strings.Yougram_Settings_Chats, iconName: "slider.horizontal.3", keywords: "camera zoom slider video message", destructive: false, enabled: true, kind: .toggle(key: \.cameraZoomSlider, requiresRestart: false)),
     ]
 }
 
@@ -391,6 +394,12 @@ private func yougramEntries(screen: YougramScreen, settings: YougramSettings, lo
         b.toggle(strings.Yougram_Chats_AirPlay, settings, \.airPlayButton, icon: yougramIcon("airplayvideo", theme: theme))
         b.toggle(strings.Yougram_Chats_DisablePip, settings, \.disablePipOnSwipe, icon: yougramIcon("rectangle.on.rectangle", theme: theme))
         b.toggle(strings.Yougram_Chats_SmallVideoControls, settings, \.disableLargeVideoControls, icon: yougramIcon("slider.horizontal.3", theme: theme))
+        b.newSection()
+        b.header(strings.Yougram_Chats_Camera)
+        b.toggle(strings.Yougram_Chats_CameraOptimization, settings, \.cameraOptimization, icon: yougramIcon("speedometer", theme: theme))
+        b.toggle(strings.Yougram_Chats_CameraStartUltraWide, settings, \.cameraStartUltraWide, icon: yougramIcon("camera.aperture", theme: theme))
+        b.toggle(strings.Yougram_Chats_CameraZoomSlider, settings, \.cameraZoomSlider, icon: yougramIcon("slider.horizontal.3", theme: theme))
+        b.info(strings.Yougram_Chats_CameraOptimizationInfo)
     case .contextMenu:
         for action in YougramContextMenuAction.allCases {
             b.contextMenuToggle(yougramContextMenuActionTitle(action, strings: strings), settings, action)

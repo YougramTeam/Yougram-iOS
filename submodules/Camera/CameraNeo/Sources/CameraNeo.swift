@@ -201,6 +201,8 @@ final class CameraNeo: NSObject, CameraProtocol {
                 }
                 self.recorder?.cancel()
                 self.recorder = nil
+                self.frameProcessor?.flushCaches()
+                self.frameProcessor = nil
                 let _ = self.recordingActive.modify { _ in false }
                 let _ = self.recordingStopRequested.modify { _ in false }
             }
@@ -273,6 +275,12 @@ final class CameraNeo: NSObject, CameraProtocol {
     }
 
     func setZoomScale(_ zoomScale: CGFloat) {
+        self.updateZoom { [weak self] device in
+            guard let self else {
+                return device.videoZoomFactor
+            }
+            return self.neutralZoomFactor(for: device) * zoomScale
+        }
     }
 
     func startRecording(captureMode: CameraCaptureMode) -> Signal<CameraRecordingData, CameraRecordingError> {
@@ -378,6 +386,7 @@ final class CameraNeo: NSObject, CameraProtocol {
                         initialPosition: self.positionValue.with { $0 },
                         mode: self.roundVideoMode,
                         usesMultiCam: self.useMultiCam,
+                        optimizePerformance: self.configuration.optimizePerformance,
                         log: self.log,
                         durationUpdated: { [weak self] duration in
                             guard let self else {
@@ -507,8 +516,11 @@ final class CameraNeo: NSObject, CameraProtocol {
     }
 
     func setZoomLevel(_ zoomLevel: CGFloat) {
-        self.updateZoom { device in
-            return 1.0 + zoomLevel
+        self.updateZoom { [weak self] device in
+            guard let self else {
+                return device.videoZoomFactor
+            }
+            return self.neutralZoomFactor(for: device) + zoomLevel
         }
     }
 
@@ -828,6 +840,21 @@ final class CameraNeo: NSObject, CameraProtocol {
     }
 
     private func makeVideoDevice(position: Camera.Position) -> AVCaptureDevice? {
+        if !self.useMultiCam && position == .back {
+            if #available(iOS 13.0, *) {
+                let preferredTypes: [AVCaptureDevice.DeviceType]
+                if self.configuration.preferUltraWide || !self.configuration.optimizePerformance {
+                    preferredTypes = [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera]
+                } else {
+                    preferredTypes = [.builtInWideAngleCamera, .builtInTripleCamera, .builtInDualWideCamera]
+                }
+                for deviceType in preferredTypes {
+                    if let device = AVCaptureDevice.default(deviceType, for: .video, position: position) {
+                        return device
+                    }
+                }
+            }
+        }
         if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
             return device
         }
@@ -836,6 +863,16 @@ final class CameraNeo: NSObject, CameraProtocol {
             mediaType: .video,
             position: position
         ).devices.first
+    }
+
+    private func neutralZoomFactor(for device: AVCaptureDevice) -> CGFloat {
+        if #available(iOS 13.0, *) {
+            if let indexOfWideAngle = device.constituentDevices.firstIndex(where: { $0.deviceType == .builtInWideAngleCamera }), indexOfWideAngle > 0 {
+                let zoomFactor = device.virtualDeviceSwitchOverVideoZoomFactors[indexOfWideAngle - 1]
+                return CGFloat(zoomFactor.doubleValue)
+            }
+        }
+        return 1.0
     }
 
     private func configureCaptureFormat(device: AVCaptureDevice) -> Bool {
@@ -850,6 +887,15 @@ final class CameraNeo: NSObject, CameraProtocol {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
             device.activeFormat = format
+            if device.position == .back {
+                let targetZoom: CGFloat
+                if self.configuration.preferUltraWide && !self.useMultiCam {
+                    targetZoom = device.minAvailableVideoZoomFactor
+                } else {
+                    targetZoom = self.neutralZoomFactor(for: device)
+                }
+                device.videoZoomFactor = self.clampedZoom(targetZoom, device: device)
+            }
             if device.isLowLightBoostSupported {
                 device.automaticallyEnablesLowLightBoostWhenAvailable = true
             }
@@ -925,7 +971,13 @@ final class CameraNeo: NSObject, CameraProtocol {
             guard let connection = output?.connection(with: .video), let device else {
                 continue
             }
-            let supportsStandard = connection.isVideoStabilizationSupported && device.activeFormat.isVideoStabilizationModeSupported(.standard)
+            let allowStabilization: Bool
+            if self.configuration.optimizePerformance && (self.roundVideoMode == .vga || device.position == .front) {
+                allowStabilization = false
+            } else {
+                allowStabilization = true
+            }
+            let supportsStandard = allowStabilization && connection.isVideoStabilizationSupported && device.activeFormat.isVideoStabilizationModeSupported(.standard)
             connection.preferredVideoStabilizationMode = supportsStandard ? .standard : .off
             self.stabilizationObservers.append(connection.observe(\.activeVideoStabilizationMode, options: [.new]) { [weak self, weak connection] _, _ in
                 self?.sessionQueue.async { [weak self, weak connection] in
@@ -1024,7 +1076,7 @@ final class CameraNeo: NSObject, CameraProtocol {
     }
 
     private func clampedZoom(_ value: CGFloat, device: AVCaptureDevice) -> CGFloat {
-        let minimum = max(1.0, device.minAvailableVideoZoomFactor)
+        let minimum = device.minAvailableVideoZoomFactor
         let maximum = max(minimum, device.maxAvailableVideoZoomFactor)
         return min(maximum, max(minimum, value))
     }

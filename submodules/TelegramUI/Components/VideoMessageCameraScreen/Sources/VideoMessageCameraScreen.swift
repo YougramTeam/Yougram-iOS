@@ -7,6 +7,7 @@ import SwiftSignalKit
 import ViewControllerComponent
 import ComponentDisplayAdapters
 import TelegramPresentationData
+import TelegramUIPreferences
 import AccountContext
 import TelegramCore
 import PresentationDataUtils
@@ -334,6 +335,7 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
             
             let isFrontCamera = controller.cameraState.position == .back
             camera.togglePosition()
+            controller.node.syncZoomForPosition(isFrontCamera ? .front : .back)
                                     
             self.hapticFeedback.impact(.veryLight)
             
@@ -456,7 +458,7 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
                     |> deliverOnMainQueue).startStrict(next: { [weak self] recordingData in
                         let duration = initialDuration + recordingData.duration
                         if let self, let controller = self.getController() {
-                            controller.updateCameraState({ $0.updatedDuration(duration) }, transition: .easeInOut(duration: 0.1))
+                            controller.updateRecordingDuration(duration)
                             if isFirstRecording {
                                 controller.node.setupLiveUpload(filePath: recordingData.filePath)
                             }
@@ -920,6 +922,11 @@ public class VideoMessageCameraScreen: ViewController {
         fileprivate var additionalPreviewView: CameraSimplePreviewView
         private var progressView: RecordingProgressView
         private let loadingView: LoadingEffectView
+        private var zoomSliderView: CameraZoomSliderView?
+        private var currentZoomScale: Float = 1.0
+        private let preferUltraWide: Bool
+        private let optimizePerformance: Bool
+        private let zoomSliderEnabled: Bool
         
         private var resultPreviewView: ResultPreviewView?
         
@@ -939,6 +946,10 @@ public class VideoMessageCameraScreen: ViewController {
         
         private var presentationData: PresentationData
         private var validLayout: ContainerViewLayout?
+
+        fileprivate func updateProgressValue(_ duration: Double) {
+            self.progressView.value = CGFloat(duration / 60.0)
+        }
         
         fileprivate var didAppear: () -> Void = {}
         
@@ -975,6 +986,11 @@ public class VideoMessageCameraScreen: ViewController {
             self.controller = controller
             self.context = controller.context
             
+            let yougramSettings = YougramSettings.current
+            self.preferUltraWide = yougramSettings.cameraStartUltraWide
+            self.optimizePerformance = yougramSettings.cameraOptimization
+            self.zoomSliderEnabled = yougramSettings.cameraZoomSlider
+
             let experimentalSettings = self.context.sharedContext.immediateExperimentalUISettings
             let useModernVideoMessagePipeline = experimentalSettings.useModernVideoMessagePipeline ?? (self.context.getAppConfigValue("ios_killswitch_disable_neo_round_camera_v2") == nil)
             let mode: NeoCameraImpl.RoundVideoMode?
@@ -984,9 +1000,9 @@ public class VideoMessageCameraScreen: ViewController {
             case .vga:
                 mode = .vga
             case .hdBilinear:
-                mode = .hdBilinear
+                mode = self.optimizePerformance ? .vga : .hdBilinear
             case .hdLanczos:
-                mode = .hdLanczos
+                mode = self.optimizePerformance ? .vga : .hdLanczos
             }
             if let mode {
                 self.cameraImpl = NeoCameraImpl(roundVideoMode: mode, log: { message in
@@ -1011,7 +1027,7 @@ public class VideoMessageCameraScreen: ViewController {
             self.previewContainerContentView.clipsToBounds = true
             self.previewContainerView.addSubview(self.previewContainerContentView)
                         
-            let isDualCameraEnabled = cameraImpl.isDualCameraSupported(forRoundVideo: true)
+            let isDualCameraEnabled = !self.optimizePerformance && !self.preferUltraWide && cameraImpl.isDualCameraSupported(forRoundVideo: true)
             let isFrontPosition = "".isEmpty
             
             self.mainPreviewView = cameraImpl.makeCameraSimplePreviewView(frame: .zero, main: true, roundVideo: true)
@@ -1060,6 +1076,20 @@ public class VideoMessageCameraScreen: ViewController {
             self.previewContainerContentView.addSubview(self.progressView)
             self.previewContainerContentView.addSubview(self.previewBlurView)
             self.previewContainerContentView.addSubview(self.loadingView)
+
+            if self.zoomSliderEnabled {
+                let sliderView = CameraZoomSliderView()
+                sliderView.onScaleChanged = { [weak self] scale in
+                    guard let self, let camera = self.camera else {
+                        return
+                    }
+                    self.currentZoomScale = scale
+                    camera.setZoomScale(CGFloat(scale))
+                }
+                self.containerView.addSubview(sliderView)
+                self.zoomSliderView = sliderView
+                self.syncZoomForPosition(self.cameraState.position)
+            }
             
             self.completion.connect { [weak self] result in
                 if let self {
@@ -1139,7 +1169,9 @@ public class VideoMessageCameraScreen: ViewController {
                     audio: true,
                     photo: false,
                     metadata: false,
-                    isRoundVideo: true
+                    isRoundVideo: true,
+                    preferUltraWide: self.preferUltraWide,
+                    optimizePerformance: self.optimizePerformance
                 ),
                 previewView: self.mainPreviewView,
                 secondaryPreviewView: self.additionalPreviewView
@@ -1153,7 +1185,11 @@ public class VideoMessageCameraScreen: ViewController {
                 guard let self else {
                     return
                 }
+                let previousPosition = self.cameraState.position
                 self.cameraState = self.cameraState.updatedPosition(position).updatedFlashMode(flashMode)
+                if previousPosition != position {
+                    self.syncZoomForPosition(position)
+                }
                 
                 if !self.cameraState.isDualCameraEnabled {
                     self.animatePositionChange()
@@ -1171,6 +1207,27 @@ public class VideoMessageCameraScreen: ViewController {
                 self.startRecording.invoke(Void())
             }
         }
+
+        private func zoomSliderBounds(for position: Camera.Position) -> (min: Float, max: Float, defaultScale: Float) {
+            if position == .back {
+                let canUltraWide = Camera.backCameraSupportsUltraWide() && (self.cameraImpl is LegacyCameraImpl || (!self.cameraState.isDualCameraEnabled && (self.preferUltraWide || !self.optimizePerformance)))
+                let minScale: Float = canUltraWide ? 0.5 : 1.0
+                let defaultScale: Float = (canUltraWide && self.preferUltraWide) ? 0.5 : 1.0
+                return (minScale, 8.0, defaultScale)
+            }
+            return (1.0, 5.0, 1.0)
+        }
+
+        fileprivate func syncZoomForPosition(_ position: Camera.Position) {
+            let bounds = self.zoomSliderBounds(for: position)
+            self.currentZoomScale = bounds.defaultScale
+            self.zoomSliderView?.update(minScale: bounds.min, maxScale: bounds.max, currentScale: bounds.defaultScale, defaultScale: bounds.defaultScale)
+        }
+
+        private func refreshZoomSlider() {
+            let bounds = self.zoomSliderBounds(for: self.cameraState.position)
+            self.zoomSliderView?.update(minScale: bounds.min, maxScale: bounds.max, currentScale: self.currentZoomScale, defaultScale: bounds.defaultScale)
+        }
         
         @objc private func handlePinch(_ gestureRecognizer: UIPinchGestureRecognizer) {
             switch gestureRecognizer.state {
@@ -1181,18 +1238,42 @@ public class VideoMessageCameraScreen: ViewController {
                     return
                 }
                 let scale = gestureRecognizer.scale
-                camera.setZoomDelta(scale)
+                if self.zoomSliderView != nil {
+                    let bounds = self.zoomSliderBounds(for: self.cameraState.position)
+                    let updated = min(bounds.max, max(bounds.min, self.currentZoomScale * Float(scale)))
+                    self.currentZoomScale = updated
+                    camera.setZoomScale(CGFloat(updated))
+                    self.refreshZoomSlider()
+                } else {
+                    camera.setZoomDelta(scale)
+                }
                 gestureRecognizer.scale = 1.0
             case .ended:
                 let pinchStartTimestamp = self.pinchStartTimestamp
                 self.pinchStartTimestamp = nil
+                if self.zoomSliderView != nil {
+                    return
+                }
                 if let pinchStartTimestamp, CACurrentMediaTime() - pinchStartTimestamp <= 0.5 {
                     return
                 }
-                self.camera?.rampZoom(1.0, rate: 8.0)
+                let targetScale = CGFloat(self.zoomSliderBounds(for: self.cameraState.position).defaultScale)
+                if targetScale < 1.0 {
+                    self.camera?.setZoomScale(targetScale)
+                } else {
+                    self.camera?.rampZoom(1.0, rate: 8.0)
+                }
             case .cancelled:
                 self.pinchStartTimestamp = nil
-                self.camera?.rampZoom(1.0, rate: 8.0)
+                if self.zoomSliderView != nil {
+                    return
+                }
+                let targetScale = CGFloat(self.zoomSliderBounds(for: self.cameraState.position).defaultScale)
+                if targetScale < 1.0 {
+                    self.camera?.setZoomScale(targetScale)
+                } else {
+                    self.camera?.rampZoom(1.0, rate: 8.0)
+                }
             case .failed:
                 self.pinchStartTimestamp = nil
             default:
@@ -1358,7 +1439,13 @@ public class VideoMessageCameraScreen: ViewController {
         /// Whether `view` is a control the component host put on screen (the record-more, view-once,
         /// flip and flash buttons are all `UIButton`s; the mute badge and the front-flash image are not).
         private func isComponentControl(_ view: UIView?) -> Bool {
-            guard let view, let componentView = self.componentHost.view, view.isDescendant(of: componentView) else {
+            guard let view else {
+                return false
+            }
+            if let zoomSliderView = self.zoomSliderView, view.isDescendant(of: zoomSliderView) {
+                return true
+            }
+            guard let componentView = self.componentHost.view, view.isDescendant(of: componentView) else {
                 return false
             }
             if view is UIControl {
@@ -1372,6 +1459,9 @@ public class VideoMessageCameraScreen: ViewController {
         
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             let result = super.hitTest(point, with: event)
+            if let result, let zoomSliderView = self.zoomSliderView, result.isDescendant(of: zoomSliderView) {
+                return result
+            }
             
             // The preview is claimed by its *bounding square*, while only the inscribed circle is
             // visible - `previewContainerContentView` clips to a corner radius. The component host is a
@@ -1707,6 +1797,28 @@ public class VideoMessageCameraScreen: ViewController {
                 let componentFrame = CGRect(origin: .zero, size: componentSize)
                 transition.setFrame(view: componentView, frame: componentFrame)
             }
+
+            if let zoomSliderView = self.zoomSliderView {
+                self.containerView.bringSubviewToFront(zoomSliderView)
+                let isVisible = self.previewState == nil && !self.transitioningToPreview
+                zoomSliderView.isUserInteractionEnabled = isVisible
+                transition.setAlpha(view: zoomSliderView, alpha: isVisible ? 1.0 : 0.0)
+
+                let maxCenterY = backgroundFrame.height - CameraZoomSliderView.preferredHeight / 2.0 - 10.0
+                let idealCenterY = previewFrame.maxY + 26.0
+                let sliderCenterY = min(maxCenterY, idealCenterY)
+                let nearBottomControls = sliderCenterY >= backgroundFrame.height - 54.0
+                let maxSliderWidth = nearBottomControls ? max(150.0, backgroundFrame.width - 216.0) : max(170.0, backgroundFrame.width - 120.0)
+                let sliderWidth = min(220.0, maxSliderWidth)
+                let sliderFrame = CGRect(
+                    x: floorToScreenPixels(previewFrame.midX - sliderWidth / 2.0),
+                    y: floorToScreenPixels(sliderCenterY - CameraZoomSliderView.preferredHeight / 2.0),
+                    width: sliderWidth,
+                    height: CameraZoomSliderView.preferredHeight
+                )
+                transition.setFrame(view: zoomSliderView, frame: sliderFrame)
+                self.refreshZoomSlider()
+            }
             
             if let previewState = self.previewState {
                 if previewState.composition !== self.resultPreviewView?.composition {
@@ -1778,6 +1890,12 @@ public class VideoMessageCameraScreen: ViewController {
         self.node.cameraState = f(self.node.cameraState)
         self.node.requestUpdateLayout(transition: transition)
         self.durationValue.set(self.cameraState.duration)
+    }
+
+    fileprivate func updateRecordingDuration(_ duration: Double) {
+        self.node.cameraState = self.node.cameraState.updatedDuration(duration)
+        self.node.updateProgressValue(duration)
+        self.durationValue.set(duration)
     }
     
     fileprivate func updatePreviewState(_ f: (PreviewState?) -> PreviewState?, transition: ComponentTransition) {

@@ -1314,7 +1314,7 @@ private func fetchCloudHistoryRecords(
 
                         fetchPage(offsetId: minIdInBatch, offsetDate: 0)
                     }, error: { rpcError in
-                        let warning = "Cloud fetch stopped early (\(rpcError.errorDescription)); exported available messages."
+                        let warning = "Cloud fetch stopped early (\(rpcError.errorDescription ?? "error \(rpcError.errorCode)")); exported available messages."
                         subscriber.putNext((collected, warning))
                         subscriber.putCompletion()
                     })

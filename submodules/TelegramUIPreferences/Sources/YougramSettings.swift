@@ -90,6 +90,11 @@ public struct YougramSettings: Codable, Equatable {
     public var disablePipOnSwipe: Bool
     public var disableLargeVideoControls: Bool
 
+    // MARK: Camera
+    public var cameraOptimization: Bool
+    public var cameraStartUltraWide: Bool
+    public var cameraZoomSlider: Bool
+
     // MARK: Appearance
     public var reduceGlass: Bool
 
@@ -145,6 +150,9 @@ public struct YougramSettings: Codable, Equatable {
             airPlayButton: true,
             disablePipOnSwipe: false,
             disableLargeVideoControls: false,
+            cameraOptimization: true,
+            cameraStartUltraWide: false,
+            cameraZoomSlider: false,
             reduceGlass: false
         )
     }
@@ -200,6 +208,9 @@ public struct YougramSettings: Codable, Equatable {
         airPlayButton: Bool,
         disablePipOnSwipe: Bool,
         disableLargeVideoControls: Bool,
+        cameraOptimization: Bool,
+        cameraStartUltraWide: Bool,
+        cameraZoomSlider: Bool,
         reduceGlass: Bool
     ) {
         self.hidePhoneInSettings = hidePhoneInSettings
@@ -252,6 +263,9 @@ public struct YougramSettings: Codable, Equatable {
         self.airPlayButton = airPlayButton
         self.disablePipOnSwipe = disablePipOnSwipe
         self.disableLargeVideoControls = disableLargeVideoControls
+        self.cameraOptimization = cameraOptimization
+        self.cameraStartUltraWide = cameraStartUltraWide
+        self.cameraZoomSlider = cameraZoomSlider
         self.reduceGlass = reduceGlass
     }
 
@@ -269,6 +283,7 @@ public struct YougramSettings: Codable, Equatable {
         case showContactsTab, showTabLabels
         case hideStories, disableStorySwipe, hideRepostToStory
         case airPlayButton, disablePipOnSwipe, disableLargeVideoControls
+        case cameraOptimization, cameraStartUltraWide, cameraZoomSlider
         case reduceGlass
     }
 
@@ -328,6 +343,9 @@ public struct YougramSettings: Codable, Equatable {
         self.airPlayButton = bool(.airPlayButton, d.airPlayButton)
         self.disablePipOnSwipe = bool(.disablePipOnSwipe, d.disablePipOnSwipe)
         self.disableLargeVideoControls = bool(.disableLargeVideoControls, d.disableLargeVideoControls)
+        self.cameraOptimization = bool(.cameraOptimization, d.cameraOptimization)
+        self.cameraStartUltraWide = bool(.cameraStartUltraWide, d.cameraStartUltraWide)
+        self.cameraZoomSlider = bool(.cameraZoomSlider, d.cameraZoomSlider)
         self.reduceGlass = bool(.reduceGlass, d.reduceGlass)
     }
 
@@ -383,6 +401,9 @@ public struct YougramSettings: Codable, Equatable {
         try c.encode(self.airPlayButton, forKey: .airPlayButton)
         try c.encode(self.disablePipOnSwipe, forKey: .disablePipOnSwipe)
         try c.encode(self.disableLargeVideoControls, forKey: .disableLargeVideoControls)
+        try c.encode(self.cameraOptimization, forKey: .cameraOptimization)
+        try c.encode(self.cameraStartUltraWide, forKey: .cameraStartUltraWide)
+        try c.encode(self.cameraZoomSlider, forKey: .cameraZoomSlider)
         try c.encode(self.reduceGlass, forKey: .reduceGlass)
     }
 

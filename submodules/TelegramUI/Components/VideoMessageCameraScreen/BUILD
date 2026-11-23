@@ -20,6 +20,7 @@ swift_library(
         "//submodules/Components/ViewControllerComponent",
         "//submodules/Components/ComponentDisplayAdapters",
         "//submodules/TelegramPresentationData",
+        "//submodules/TelegramUIPreferences",
         "//submodules/AccountContext",
         "//submodules/AppBundle",
         "//submodules/TelegramStringFormatting",

@@ -966,6 +966,7 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
                 }
                 self.gridHost.headerHostNode.addSubnode(self.cameraActivateAreaNode)
                 
+                let yougramSettings = YougramSettings.current
                 let camera = cameraImpl.makeCamera(
                     configuration: Camera.Configuration(
                         preset: .hd1920x1080,
@@ -974,7 +975,9 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
                         audio: false,
                         photo: true,
                         metadata: true,
-                        captureMode: .photo
+                        captureMode: .photo,
+                        preferUltraWide: yougramSettings.cameraStartUltraWide,
+                        optimizePerformance: yougramSettings.cameraOptimization
                     ),
                     previewView: cameraPreviewView,
                     secondaryPreviewView: nil
@@ -1013,6 +1016,7 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
                 self.cameraWrapperView.addSubview(cameraPreviewView)
                 
                 let setupCamera = {
+                    let yougramSettings = YougramSettings.current
                     let camera = cameraImpl.makeCamera(
                         configuration: Camera.Configuration(
                             preset: .hd1920x1080,
@@ -1020,7 +1024,9 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
                             isDualEnabled: false,
                             audio: false,
                             photo: true,
-                            metadata: false
+                            metadata: false,
+                            preferUltraWide: yougramSettings.cameraStartUltraWide,
+                            optimizePerformance: yougramSettings.cameraOptimization
                         ),
                         previewView: cameraPreviewView,
                         secondaryPreviewView: nil

@@ -103,23 +103,35 @@ func roundVideoCaptureFormat(
             supportsStandardStabilization: format.isVideoStabilizationModeSupported(.standard)
         )
     }
-    guard let index = selectRoundVideoCaptureFormat(
-        candidates,
-        requiresMultiCam: requiresMultiCam,
-        preferStabilization: mode != .vga && device.position == .back,
-        preferMediumProfile: device.position == .front,
-        maximumProfile: mode == .vga ? .vga : maximumProfile
-    ) else {
-        return nil
+    let fallbackProfiles: [RoundVideoCaptureProfile]
+    if mode == .vga && maximumProfile == .high {
+        fallbackProfiles = [.vga, .medium, .high]
+    } else {
+        fallbackProfiles = [mode == .vga ? .vga : maximumProfile]
     }
-    return formats[index]
+    for targetProfile in fallbackProfiles {
+        if let index = selectRoundVideoCaptureFormat(
+            candidates,
+            requiresMultiCam: requiresMultiCam,
+            preferStabilization: mode != .vga && device.position == .back,
+            preferMediumProfile: device.position == .front,
+            maximumProfile: targetProfile
+        ) {
+            return formats[index]
+        }
+    }
+    return nil
 }
 
 private func supportsDualCameraCapture(forRoundVideo: Bool, mode: NeoCameraImpl.RoundVideoMode) -> Bool {
     guard #available(iOS 13.0, *), AVCaptureMultiCamSession.isMultiCamSupported, !DeviceModel.current.isIpad else {
         return false
     }
-    if forRoundVideo && DeviceModel.current == .iPhoneXR {
+    if forRoundVideo && (
+        DeviceModel.current == .iPhoneXR ||
+        ProcessInfo.processInfo.isLowPowerModeEnabled ||
+        ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+    ) {
         return false
     }
     let positions: [AVCaptureDevice.Position] = [.back, .front]
@@ -182,12 +194,15 @@ public final class NeoCameraImpl: CameraImpl {
             cameraSecondaryPreviewView = nil
         }
 
+        let effectiveMode: RoundVideoMode = configuration.optimizePerformance ? .vga : self.roundVideoMode
+        let useMultiCam = configuration.isDualEnabled && !configuration.optimizePerformance && !configuration.preferUltraWide && supportsDualCameraCapture(forRoundVideo: configuration.isRoundVideo, mode: effectiveMode)
+
         return CameraNeo(
             configuration: configuration,
             previewView: cameraPreviewView,
             secondaryPreviewView: cameraSecondaryPreviewView,
-            useMultiCam: configuration.isDualEnabled && self.isDualCameraSupported(forRoundVideo: configuration.isRoundVideo),
-            roundVideoMode: self.roundVideoMode,
+            useMultiCam: useMultiCam,
+            roundVideoMode: effectiveMode,
             log: self.log
         )
     }

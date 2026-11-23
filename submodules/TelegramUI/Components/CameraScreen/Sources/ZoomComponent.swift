@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import Display
 import ComponentFlow
+import Camera
 
 final class ZoomComponent: Component {
     let availableValues: [Float]
@@ -136,6 +137,83 @@ final class ZoomComponent: Component {
             transition.setFrame(view: self.backgroundView, frame: CGRect(origin: .zero, size: size))
             self.backgroundView.update(size: size, transition: transition.containedViewLayoutTransition)
             
+            return size
+        }
+    }
+
+    func makeView() -> View {
+        return View()
+    }
+
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
+        return view.update(component: self, availableSize: availableSize, transition: transition)
+    }
+}
+
+final class CameraZoomSliderComponent: Component {
+    let minScale: Float
+    let maxScale: Float
+    let currentScale: Float
+    let defaultScale: Float
+    let changed: (Float) -> Void
+
+    init(
+        minScale: Float,
+        maxScale: Float,
+        currentScale: Float,
+        defaultScale: Float,
+        changed: @escaping (Float) -> Void
+    ) {
+        self.minScale = minScale
+        self.maxScale = maxScale
+        self.currentScale = currentScale
+        self.defaultScale = defaultScale
+        self.changed = changed
+    }
+
+    static func ==(lhs: CameraZoomSliderComponent, rhs: CameraZoomSliderComponent) -> Bool {
+        if abs(lhs.minScale - rhs.minScale) > 0.001 {
+            return false
+        }
+        if abs(lhs.maxScale - rhs.maxScale) > 0.001 {
+            return false
+        }
+        if abs(lhs.currentScale - rhs.currentScale) > 0.001 {
+            return false
+        }
+        if abs(lhs.defaultScale - rhs.defaultScale) > 0.001 {
+            return false
+        }
+        return true
+    }
+
+    final class View: UIView {
+        private let sliderView = CameraZoomSliderView()
+        private var component: CameraZoomSliderComponent?
+
+        init() {
+            super.init(frame: .zero)
+            self.addSubview(self.sliderView)
+            self.sliderView.onScaleChanged = { [weak self] value in
+                self?.component?.changed(value)
+            }
+        }
+
+        required init?(coder: NSCoder) {
+            preconditionFailure()
+        }
+
+        func update(component: CameraZoomSliderComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
+            self.component = component
+            let width = min(240.0, max(168.0, availableSize.width - 32.0))
+            let size = CGSize(width: width, height: CameraZoomSliderView.preferredHeight)
+            transition.setFrame(view: self.sliderView, frame: CGRect(origin: .zero, size: size))
+            self.sliderView.update(
+                minScale: component.minScale,
+                maxScale: component.maxScale,
+                currentScale: component.currentScale,
+                defaultScale: component.defaultScale
+            )
             return size
         }
     }

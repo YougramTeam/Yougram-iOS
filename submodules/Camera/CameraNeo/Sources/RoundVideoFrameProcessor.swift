@@ -235,6 +235,7 @@ final class RoundVideoFrameProcessor {
     private let outputPool: CVPixelBufferPool
     private let outputPoolAuxiliaryAttributes: CFDictionary
     private var isRendering = false
+    private var completedFrameCount = 0
     private var primaryLanczosScaler: RoundVideoLanczosScaler?
     private var secondaryLanczosScaler: RoundVideoLanczosScaler?
 
@@ -521,6 +522,11 @@ final class RoundVideoFrameProcessor {
                     return
                 }
                 self.isRendering = false
+                self.completedFrameCount += 1
+                if self.completedFrameCount >= 30 {
+                    self.completedFrameCount = 0
+                    CVMetalTextureCacheFlush(self.textureCache, 0)
+                }
                 withExtendedLifetime(retainedPixelBuffers) {
                     withExtendedLifetime(retainedTextures) {
                         completion(processedFrame)
@@ -530,6 +536,14 @@ final class RoundVideoFrameProcessor {
         }
         submitted = true
         commandBuffer.commit()
+    }
+
+    func flushCaches() {
+        CVMetalTextureCacheFlush(self.textureCache, 0)
+    }
+
+    deinit {
+        CVMetalTextureCacheFlush(self.textureCache, 0)
     }
 
     private static func dispatch(

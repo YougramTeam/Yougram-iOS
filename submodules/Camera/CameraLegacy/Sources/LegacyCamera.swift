@@ -61,7 +61,7 @@ final class CameraDeviceContext {
         self.output = CameraOutput(exclusive: exclusive, ciContext: ciContext, colorSpace: colorSpace, use32BGRA: isRoundVideo)
     }
     
-    func configure(position: Camera.Position, previewView: LegacyCameraSimplePreviewView?, audio: Bool, photo: Bool, metadata: Bool, preferWide: Bool = false, preferLowerFramerate: Bool = false, switchAudio: Bool = true, captureMode: CameraCaptureMode? = nil) {
+    func configure(position: Camera.Position, previewView: LegacyCameraSimplePreviewView?, audio: Bool, photo: Bool, metadata: Bool, preferWide: Bool = false, preferLowerFramerate: Bool = false, preferUltraWide: Bool = false, switchAudio: Bool = true, captureMode: CameraCaptureMode? = nil) {
         guard let session = self.session else {
             return
         }
@@ -78,7 +78,7 @@ final class CameraDeviceContext {
         
         self.output.configureVideoStabilization()
         
-        self.device.resetZoom(neutral: self.exclusive || !self.additional)
+        self.device.resetZoom(neutral: (self.exclusive || !self.additional) && !(preferUltraWide && position == .back))
     }
     
     func invalidate(switchAudio: Bool = true) {
@@ -143,15 +143,24 @@ private final class CameraContext {
     private var savedAdditionalSnapshot = false
     
     private func savePreviewSnapshot(pixelBuffer: CVPixelBuffer, front: Bool) {
+        if self.mainDeviceContext?.output.isRecording == true || self.additionalDeviceContext?.output.isRecording == true {
+            return
+        }
         Queue.concurrentDefaultQueue().async {
             var ciImage = CIImage(cvImageBuffer: pixelBuffer)
-            let size = ciImage.extent.size
+            var size = ciImage.extent.size
+            let maxDimension = max(size.width, size.height)
+            if maxDimension > 320.0 {
+                let scale = 320.0 / maxDimension
+                ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                size = ciImage.extent.size
+            }
             if front {
                 var transform = CGAffineTransformMakeScale(1.0, -1.0)
                 transform = CGAffineTransformTranslate(transform, 0.0, -size.height)
                 ciImage = ciImage.transformed(by: transform)
             }
-            ciImage = ciImage.clampedToExtent().applyingGaussianBlur(sigma: legacyIsDualCameraSupported(forRoundVideo: true) ? 60.0 : 40.0).cropped(to: CGRect(origin: .zero, size: size))
+            ciImage = ciImage.clampedToExtent().applyingGaussianBlur(sigma: 12.0).cropped(to: CGRect(origin: .zero, size: size))
             if let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
                 let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
                 if front {
@@ -287,7 +296,7 @@ private final class CameraContext {
                 let preferWide = self.initialConfiguration.preferWide || isRoundVideo
                 let preferLowerFramerate = self.initialConfiguration.preferLowerFramerate || isRoundVideo
                 
-                mainDeviceContext.configure(position: targetPosition, previewView: self.simplePreviewView, audio: self.initialConfiguration.audio, photo: self.initialConfiguration.photo, metadata: self.initialConfiguration.metadata, preferWide: preferWide, preferLowerFramerate: preferLowerFramerate, switchAudio: !isRoundVideo, captureMode: self.captureMode)
+                mainDeviceContext.configure(position: targetPosition, previewView: self.simplePreviewView, audio: self.initialConfiguration.audio, photo: self.initialConfiguration.photo, metadata: self.initialConfiguration.metadata, preferWide: preferWide, preferLowerFramerate: preferLowerFramerate, preferUltraWide: self.initialConfiguration.preferUltraWide, switchAudio: !isRoundVideo, captureMode: self.captureMode)
                 if isRoundVideo {
                     mainDeviceContext.output.markPositionChange(position: targetPosition)
                 }
@@ -311,7 +320,7 @@ private final class CameraContext {
             let preferWide = self.initialConfiguration.preferWide || (self.positionValue == .front && self.initialConfiguration.isRoundVideo)
             let preferLowerFramerate = self.initialConfiguration.preferLowerFramerate || self.initialConfiguration.isRoundVideo
             
-            self.mainDeviceContext?.configure(position: position, previewView: self.simplePreviewView, audio: self.initialConfiguration.audio, photo: self.initialConfiguration.photo, metadata: self.initialConfiguration.metadata, preferWide: preferWide, preferLowerFramerate: preferLowerFramerate, captureMode: self.captureMode)
+            self.mainDeviceContext?.configure(position: position, previewView: self.simplePreviewView, audio: self.initialConfiguration.audio, photo: self.initialConfiguration.photo, metadata: self.initialConfiguration.metadata, preferWide: preferWide, preferLowerFramerate: preferLowerFramerate, preferUltraWide: self.initialConfiguration.preferUltraWide, captureMode: self.captureMode)
                         
             self.queue.after(0.5) {
                 self.modeChange = .none
@@ -393,7 +402,7 @@ private final class CameraContext {
                 
                 self.mainDeviceContext = CameraDeviceContext(session: self.session, exclusive: true, additional: false, ciContext: self.ciContext, colorSpace: self.colorSpace, isRoundVideo: self.initialConfiguration.isRoundVideo)
                 self.mainDeviceContext?.device.queue = self.queue
-                self.mainDeviceContext?.configure(position: self.positionValue, previewView: self.simplePreviewView, audio: self.initialConfiguration.audio, photo: self.initialConfiguration.photo, metadata: self.initialConfiguration.metadata, preferWide: preferWide, preferLowerFramerate: preferLowerFramerate, captureMode: self.captureMode)
+                self.mainDeviceContext?.configure(position: self.positionValue, previewView: self.simplePreviewView, audio: self.initialConfiguration.audio, photo: self.initialConfiguration.photo, metadata: self.initialConfiguration.metadata, preferWide: preferWide, preferLowerFramerate: preferLowerFramerate, preferUltraWide: self.initialConfiguration.preferUltraWide, captureMode: self.captureMode)
             }
             self.mainDeviceContext?.output.processSampleBuffer = { [weak self] sampleBuffer, pixelBuffer, connection in
                 guard let self, let mainDeviceContext = self.mainDeviceContext else {
@@ -630,7 +639,8 @@ private final class CameraContext {
     }
     
     func setZoomScale(_ zoomScale: CGFloat) {
-        if self.initialConfiguration.isRoundVideo {
+        if self.initialConfiguration.isRoundVideo && self.positionValue == .front, let additionalDeviceContext = self.additionalDeviceContext {
+            additionalDeviceContext.device.setZoomScale(zoomScale)
             return
         }
         self.mainDeviceContext?.device.setZoomScale(zoomScale)

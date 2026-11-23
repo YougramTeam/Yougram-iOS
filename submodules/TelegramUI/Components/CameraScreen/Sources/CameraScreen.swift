@@ -8,6 +8,7 @@ import SwiftSignalKit
 import ViewControllerComponent
 import ComponentDisplayAdapters
 import TelegramPresentationData
+import TelegramUIPreferences
 import AccountContext
 import ContextUI
 import TelegramCore
@@ -777,10 +778,15 @@ private final class CameraScreenComponent: CombinedComponent {
             }
             self.lastFlipTimestamp = currentTimestamp
             
+            let yougramSettings = YougramSettings.current
+            let targetPosition: Camera.Position = controller.cameraState.position == .back ? .front : .back
+            let resetScale: Float = (targetPosition == .back && yougramSettings.cameraStartUltraWide && Camera.backCameraSupportsUltraWide() && !controller.cameraState.isDualCameraEnabled) ? 0.5 : 1.0
             camera.togglePosition()
             if case .chat = self.mode {
-                controller.node.chatZoomScale = 1.0
+                controller.node.chatZoomScale = resetScale
                 controller.node.resetFocusIndicator()
+            } else {
+                controller.node.storyZoomScale = resetScale
             }
             
             action.invoke(Void())
@@ -807,6 +813,11 @@ private final class CameraScreenComponent: CombinedComponent {
             
             let isEnabled = !controller.cameraState.isDualCameraEnabled
             camera.setDualCameraEnabled(isEnabled)
+            if !isEnabled, controller.cameraState.position == .back, YougramSettings.current.cameraStartUltraWide, Camera.backCameraSupportsUltraWide() {
+                controller.node.storyZoomScale = 0.5
+            } else {
+                controller.node.storyZoomScale = 1.0
+            }
             controller.updateCameraState({ $0.updatedIsDualCameraEnabled(isEnabled) }, transition: .easeInOut(duration: 0.1))
             
             self.hapticFeedback.impact(.light)
@@ -1534,6 +1545,7 @@ private final class CameraScreenComponent: CombinedComponent {
         let endStreamButton = Child(GlassBarButtonComponent.self)
         let captureControls = Child(CaptureControlsComponent.self)
         let zoomControl = Child(ZoomComponent.self)
+        let zoomSliderControl = Child(CameraZoomSliderComponent.self)
         let streamAsButton = Child(PlainButtonComponent.self)
         let flashButton = Child(CameraButton.self)
         let topFlipButton = Child(CameraButton.self)
@@ -1624,6 +1636,7 @@ private final class CameraScreenComponent: CombinedComponent {
                 )
             }
                         
+            var zoomControlCenterY: CGFloat?
             if case .holding = component.cameraState.recording {
                 
             } else if case .chat = modeKind, hasAllRequiredAccess, case .back = component.cameraState.position, !state.isTransitioning, let controller = controller() as? CameraScreenImpl, let camera = controller.camera, camera.metrics.zoomLevels.count > 1 {
@@ -1640,27 +1653,15 @@ private final class CameraScreenComponent: CombinedComponent {
                     availableSize: context.availableSize,
                     transition: context.transition
                 )
+                let centerY = component.chatScreenLayout?.zoomCenterY ?? (availableSize.height - zoomControl.size.height / 2.0 - 114.0 - environment.safeInsets.bottom)
+                zoomControlCenterY = centerY
                 context.add(zoomControl
-                    .position(CGPoint(x: context.availableSize.width / 2.0, y: component.chatScreenLayout?.zoomCenterY ?? (availableSize.height - zoomControl.size.height / 2.0 - 114.0 - environment.safeInsets.bottom)))
+                    .position(CGPoint(x: context.availableSize.width / 2.0, y: centerY))
                     .appear(.default(alpha: true))
                     .disappear(.default(alpha: true))
                 )
             } else {
                 let _ = zoomControl
-//                let zoomControl = zoomControl.update(
-//                    component: ZoomComponent(
-//                        availableValues: state.camera.metrics.zoomLevels,
-//                        value: 1.0,
-//                        tag: zoomControlTag
-//                    ),
-//                    availableSize: context.availableSize,
-//                    transition: context.transition
-//                )
-//                context.add(zoomControl
-//                    .position(CGPoint(x: context.availableSize.width / 2.0, y: availableSize.height - zoomControl.size.height / 2.0 - 114.0 - environment.safeInsets.bottom))
-//                    .appear(.default(alpha: true))
-//                    .disappear(.default(alpha: true))
-//                )
             }
             
             let displayFrontFlash = component.cameraState.recording != .none || component.cameraState.mode == .video || state.displayingFlashTint
@@ -1833,6 +1834,55 @@ private final class CameraScreenComponent: CombinedComponent {
             context.add(captureControls
                 .position(captureControlsPosition)
             )
+
+            let yougramSettings = YougramSettings.current
+            if yougramSettings.cameraZoomSlider, hasAllRequiredAccess, !state.isTransitioning, case .none = component.cameraState.recording, let cameraController = controller() as? CameraScreenImpl {
+                let isChatMode: Bool
+                if case .chat = modeKind {
+                    isChatMode = true
+                } else {
+                    isChatMode = false
+                }
+                let supportsUltraWide = component.cameraState.position == .back && !component.cameraState.isDualCameraEnabled && (cameraController.camera?.metrics.zoomLevels.contains(0.5) ?? Camera.backCameraSupportsUltraWide())
+                let minScale: Float = supportsUltraWide ? 0.5 : 1.0
+                let maxScale: Float = 8.0
+                let defaultScale: Float = (supportsUltraWide && yougramSettings.cameraStartUltraWide) ? 0.5 : 1.0
+                let currentScale = isChatMode ? cameraController.node.chatZoomScale : cameraController.node.storyZoomScale
+
+                let zoomSlider = zoomSliderControl.update(
+                    component: CameraZoomSliderComponent(
+                        minScale: minScale,
+                        maxScale: maxScale,
+                        currentScale: currentScale,
+                        defaultScale: defaultScale,
+                        changed: { [weak cameraController] value in
+                            guard let cameraController else {
+                                return
+                            }
+                            if isChatMode {
+                                cameraController.node.updateChatZoomScale(value, animated: false)
+                            } else {
+                                cameraController.node.updateStoryZoomScale(value)
+                            }
+                        }
+                    ),
+                    availableSize: context.availableSize,
+                    transition: context.transition
+                )
+                let sliderCenterY: CGFloat
+                if let zoomControlCenterY {
+                    sliderCenterY = zoomControlCenterY - 43.0 / 2.0 - zoomSlider.size.height / 2.0 - 8.0
+                } else if isTablet {
+                    sliderCenterY = availableSize.height - zoomSlider.size.height / 2.0 - max(24.0, environment.safeInsets.bottom) - 16.0
+                } else {
+                    sliderCenterY = captureControlsPosition.y - captureControls.size.height / 2.0 - zoomSlider.size.height / 2.0 - 12.0
+                }
+                context.add(zoomSlider
+                    .position(CGPoint(x: availableSize.width / 2.0, y: sliderCenterY))
+                    .appear(.default(alpha: true))
+                    .disappear(.default(alpha: true))
+                )
+            }
             
             if component.cameraState.mode == .live {
                 let topGradient = topGradient.update(
@@ -3140,6 +3190,11 @@ public class CameraScreenImpl: ViewController, CameraScreen {
                 isStreaming: .none,
                 isWaitingForStream: false
             )
+            let yougramSettings = YougramSettings.current
+            if !cameraFrontPosition && yougramSettings.cameraStartUltraWide && Camera.backCameraSupportsUltraWide() && !isDualCameraEnabled {
+                self.chatZoomScale = 0.5
+                self.storyZoomScale = 0.5
+            }
                         
             self.previewFrameLeftDimView = UIView()
             self.previewFrameLeftDimView.backgroundColor = UIColor(rgb: 0x000000, alpha: 0.6)
@@ -3598,8 +3653,10 @@ public class CameraScreenImpl: ViewController, CameraScreen {
         }
 
         fileprivate var chatZoomScale: Float = 1.0
+        fileprivate var storyZoomScale: Float = 1.0
         private var chatHoldZoomStartScale: Float = 1.0
         private var chatZoomLabelKey: String?
+        private var storyZoomLabelKey: String?
         
         private var chatZoomLevels: [Float] {
             guard let camera = self.camera else {
@@ -3621,6 +3678,22 @@ public class CameraScreenImpl: ViewController, CameraScreen {
             if labelKey != self.chatZoomLabelKey {
                 self.chatZoomLabelKey = labelKey
                 self.requestUpdateLayout(transition: animated ? .easeInOut(duration: 0.2) : .immediate)
+            }
+        }
+
+        fileprivate func updateStoryZoomScale(_ scale: Float) {
+            guard let camera = self.camera else {
+                return
+            }
+            let minScale: Float = (self.cameraState.position == .back && !self.cameraState.isDualCameraEnabled && Camera.backCameraSupportsUltraWide()) ? 0.5 : 1.0
+            let clamped = max(minScale, min(8.0, scale))
+            self.storyZoomScale = clamped
+            camera.setZoomScale(CGFloat(clamped))
+            let rounded = (clamped * 10.0).rounded() / 10.0
+            let key = String(format: "%.1f", rounded)
+            if key != self.storyZoomLabelKey {
+                self.storyZoomLabelKey = key
+                self.requestUpdateLayout(transition: .immediate)
             }
         }
         
@@ -3769,6 +3842,7 @@ public class CameraScreenImpl: ViewController, CameraScreen {
                     let _ = camera.setCaptureMode(captureMode).startStandalone()
                 }
             } else if let chatParams = controller.mode.chatParams {
+                let yougramSettings = YougramSettings.current
                 camera = self.cameraImpl.makeCamera(
                     configuration: Camera.Configuration(
                         preset: .hd1920x1080,
@@ -3777,13 +3851,16 @@ public class CameraScreenImpl: ViewController, CameraScreen {
                         audio: chatParams.hasAudio,
                         photo: true,
                         metadata: true,
-                        captureMode: CameraCaptureMode(self.cameraState.mode) ?? .photo
+                        captureMode: CameraCaptureMode(self.cameraState.mode) ?? .photo,
+                        preferUltraWide: yougramSettings.cameraStartUltraWide,
+                        optimizePerformance: yougramSettings.cameraOptimization
                     ),
                     previewView: self.mainPreviewView,
                     secondaryPreviewView: self.additionalPreviewView
                 )
                 isNew = true
             } else {
+                let yougramSettings = YougramSettings.current
                 camera = self.cameraImpl.makeCamera(
                     configuration: Camera.Configuration(
                         preset: .hd1920x1080,
@@ -3791,7 +3868,9 @@ public class CameraScreenImpl: ViewController, CameraScreen {
                         isDualEnabled: self.cameraState.isDualCameraEnabled,
                         audio: true,
                         photo: true,
-                        metadata: true
+                        metadata: true,
+                        preferUltraWide: yougramSettings.cameraStartUltraWide,
+                        optimizePerformance: yougramSettings.cameraOptimization
                     ),
                     previewView: self.mainPreviewView,
                     secondaryPreviewView: self.additionalPreviewView
@@ -3988,7 +4067,7 @@ public class CameraScreenImpl: ViewController, CameraScreen {
         }
         
         @objc private func handlePinch(_ gestureRecognizer: UIPinchGestureRecognizer) {
-            guard let camera = self.camera else {
+            guard self.camera != nil else {
                 return
             }
             switch gestureRecognizer.state {
@@ -3997,7 +4076,7 @@ public class CameraScreenImpl: ViewController, CameraScreen {
                 if case .chat = self.controller?.mode {
                     self.updateChatZoomScale(self.chatZoomScale * Float(scale), animated: false)
                 } else {
-                    camera.setZoomDelta(scale)
+                    self.updateStoryZoomScale(self.storyZoomScale * Float(scale))
                 }
                 gestureRecognizer.scale = 1.0
             default:

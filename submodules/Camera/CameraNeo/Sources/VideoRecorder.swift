@@ -251,6 +251,7 @@ final class VideoRecorder {
 
     private var thumbnail: UIImage?
     private var hasGeneratedThumbnail = false
+    private let optimizePerformance: Bool
 
     init(
         mediaQueue: DispatchQueue,
@@ -260,6 +261,7 @@ final class VideoRecorder {
         initialPosition: Camera.Position,
         mode: NeoCameraImpl.RoundVideoMode,
         usesMultiCam: Bool,
+        optimizePerformance: Bool = false,
         log: ((String) -> Void)?,
         durationUpdated: @escaping (Double) -> Void,
         transitionImageUpdated: @escaping (UIImage?) -> Void,
@@ -272,6 +274,7 @@ final class VideoRecorder {
         self.url = url
         self.hasAudio = hasAudio
         self.activePosition = initialPosition
+        self.optimizePerformance = optimizePerformance
         self.durationUpdated = durationUpdated
         self.transitionImageUpdated = transitionImageUpdated
         self.runtimeFailure = runtimeFailure
@@ -621,11 +624,15 @@ final class VideoRecorder {
         }
         assetWriter.shouldOptimizeForNetworkUse = false
 
-        let compressionProperties: [String: Any] = [
-            AVVideoAverageBitRateKey: 1_200_000,
+        var compressionProperties: [String: Any] = [
+            AVVideoAverageBitRateKey: self.optimizePerformance ? 850_000 : 1_200_000,
             AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
             AVVideoH264EntropyModeKey: AVVideoH264EntropyModeCABAC
         ]
+        if self.optimizePerformance {
+            compressionProperties[AVVideoAllowFrameReorderingKey] = false
+            compressionProperties[AVVideoMaxKeyFrameIntervalKey] = 30
+        }
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: RoundVideoFrameProcessor.outputWidth,
